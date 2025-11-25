@@ -1,0 +1,50 @@
+# Pre-commit hooks configuration
+# To install: pip install pre-commit && pre-commit install
+# To run manually: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/psf/black
+    rev: 23.11.0
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-all]
+        args: [--config-file=pyproject.toml]
+        pass_filenames: false
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ['-c', 'pyproject.toml']
+        additional_dependencies: ['bandit[toml]']
+
+  - repo: local
+    hooks:
+      - id: check-secrets
+        name: Check for secrets
+        entry: bash -c 'grep -r "sk-[a-zA-Z0-9]\{48\}" . --exclude-dir={.git,venv,outputs} && exit 1 || exit 0'
+        language: system
+        pass_filenames: false

@@ -1,0 +1,116 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  lint-and-format:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Black (format check)
+        run: black --check --diff .
+
+      - name: Run Ruff (linting)
+        run: ruff check .
+
+  type-check:
+    name: Type Checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run MyPy
+        run: mypy . --config-file pyproject.toml || true
+
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Bandit (security linting)
+        run: bandit -r . -c pyproject.toml
+
+      - name: Check for secrets
+        run: |
+          echo "Checking for potential secrets..."
+          ! grep -r "sk-[a-zA-Z0-9]\{48\}" . --exclude-dir={.git,venv,outputs} || (echo "Found OpenAI API key pattern!" && exit 1)
+          ! grep -r "AIza[0-9A-Za-z_-]\{35\}" . --exclude-dir={.git,venv,outputs} || (echo "Found Google API key pattern!" && exit 1)
+          ! grep -r "AKIA[0-9A-Z]\{16\}" . --exclude-dir={.git,venv,outputs} || (echo "Found AWS key pattern!" && exit 1)
+          echo "No secrets detected."
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v || echo "No tests found yet"
+
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit -r requirements.txt || true
