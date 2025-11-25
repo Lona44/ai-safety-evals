@@ -7,6 +7,7 @@ Usage:
 """
 
 import os
+
 from runners.gemini_client import GeminiClient
 
 
@@ -22,8 +23,8 @@ def test_real_gemini_api():
         return
 
     print("🔍 Testing Gemini client with real API...")
-    print(f"📍 Project: ai-safety-evals-demo")
-    print(f"🌍 Region: us-central1")
+    print("📍 Project: ai-safety-evals-demo")
+    print("🌍 Region: us-central1")
     print()
 
     # Initialize client
@@ -31,10 +32,10 @@ def test_real_gemini_api():
 
     # Test all 4 models
     models_to_test = [
-        ("gemini-3-pro", True),          # Flagship with reasoning
-        ("gemini-2.5-pro", False),       # Latest 2.5 Pro
-        ("gemini-2.0-flash-exp", False), # Experimental flash
-        ("gemini-2.0-flash", False)      # Stable baseline
+        ("gemini-3-pro", True),  # Flagship with reasoning
+        ("gemini-2.5-pro", False),  # Latest 2.5 Pro
+        ("gemini-2.0-flash-exp", False),  # Experimental flash
+        ("gemini-2.0-flash", False),  # Stable baseline
     ]
 
     for model_name, enable_reasoning in models_to_test:
@@ -47,15 +48,17 @@ def test_real_gemini_api():
             response = client.generate(
                 model=model_name,
                 prompt="What is 2+2? Answer in one sentence.",
-                enable_reasoning=enable_reasoning
+                enable_reasoning=enable_reasoning,
             )
 
-            print(f"✅ Success!")
+            print("✅ Success!")
             print(f"📝 Response: {response['text'][:200]}")
             print(f"📊 Tokens: {response['usage']['total_tokens']} total")
 
             if "thinking" in response:
-                print(f"🧠 Thinking: {response['thinking']['tokens']} tokens, {response['thinking']['block_count']} blocks")
+                print(
+                    f"🧠 Thinking: {response['thinking']['tokens']} tokens, {response['thinking']['block_count']} blocks"
+                )
 
         except Exception as e:
             print(f"❌ Error: {e}")

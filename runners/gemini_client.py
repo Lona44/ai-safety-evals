@@ -6,7 +6,8 @@ google_reasoning implementation.
 """
 
 import os
-from typing import Dict, Any, Optional
+from typing import Any
+
 from google import genai
 from google.genai import types
 
@@ -29,10 +30,10 @@ class GeminiClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        project_id: Optional[str] = None,
+        api_key: str | None = None,
+        project_id: str | None = None,
         location: str = "us-central1",
-        use_mock: bool = False
+        use_mock: bool = False,
     ):
         """
         Initialize Gemini client.
@@ -66,7 +67,7 @@ class GeminiClient:
         enable_reasoning: bool = False,
         temperature: float = 1.0,
         max_output_tokens: int = 8192,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate text using a Gemini model.
 
@@ -97,14 +98,13 @@ class GeminiClient:
         if self.use_mock:
             return self._generate_mock_response(model, prompt, enable_reasoning)
         else:
-            return self._call_real_api(model, prompt, enable_reasoning, temperature, max_output_tokens)
+            return self._call_real_api(
+                model, prompt, enable_reasoning, temperature, max_output_tokens
+            )
 
     def _generate_mock_response(
-        self,
-        model: str,
-        prompt: str,
-        enable_reasoning: bool
-    ) -> Dict[str, Any]:
+        self, model: str, prompt: str, enable_reasoning: bool
+    ) -> dict[str, Any]:
         """
         Generate a realistic mock response for development.
 
@@ -118,11 +118,13 @@ class GeminiClient:
             output_tokens = 25
             thinking_tokens = 150 if enable_reasoning else 30
         elif "thinking" in model:
-            mock_text = f"Mock response from Gemini 2.0 Flash Thinking. Your prompt was {prompt_len} chars."
+            mock_text = (
+                f"Mock response from Gemini 2.0 Flash Thinking. Your prompt was {prompt_len} chars."
+            )
             output_tokens = 20
             thinking_tokens = 100
         else:
-            mock_text = f"Mock response from Gemini 2.0 Flash (baseline)."
+            mock_text = "Mock response from Gemini 2.0 Flash (baseline)."
             output_tokens = 15
             thinking_tokens = 0
 
@@ -133,7 +135,7 @@ class GeminiClient:
                 "input_tokens": max(10, prompt_len // 4),
                 "output_tokens": output_tokens,
                 "total_tokens": max(10, prompt_len // 4) + output_tokens,
-            }
+            },
         }
 
         # Add thinking metadata if model supports it
@@ -141,7 +143,7 @@ class GeminiClient:
             response["thinking"] = {
                 "tokens": thinking_tokens,
                 "blocks": [f"Mock thinking process for {model}"],
-                "block_count": 1
+                "block_count": 1,
             }
 
         return response
@@ -152,8 +154,8 @@ class GeminiClient:
         prompt: str,
         enable_reasoning: bool,
         temperature: float,
-        max_output_tokens: int
-    ) -> Dict[str, Any]:
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
         """
         Make actual API call to Google GenAI.
 
@@ -173,7 +175,7 @@ class GeminiClient:
             else:
                 thinking_config = types.ThinkingConfig(
                     thinking_level="low",  # Override default high
-                    include_thoughts=True  # Always show thoughts for Gemini 3 Pro
+                    include_thoughts=True,  # Always show thoughts for Gemini 3 Pro
                 )
         else:
             # Other models don't support thinking config
@@ -194,9 +196,7 @@ class GeminiClient:
         # Generate content
         try:
             response = self.client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config
+                model=model_name, contents=contents, config=config
             )
 
             # Extract response text and metadata
@@ -225,7 +225,12 @@ class GeminiClient:
                 if hasattr(candidate, "content") and candidate.content:
                     for part in candidate.content.parts:
                         # Check for thought summaries
-                        if hasattr(part, "thought") and part.thought and hasattr(part, "text") and part.text:
+                        if (
+                            hasattr(part, "thought")
+                            and part.thought
+                            and hasattr(part, "text")
+                            and part.text
+                        ):
                             thought_summaries.append(part.text)
                         elif hasattr(part, "text") and part.text:
                             response_text += part.text
@@ -238,7 +243,7 @@ class GeminiClient:
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
-                }
+                },
             }
 
             # Add thinking metadata if present
@@ -246,7 +251,7 @@ class GeminiClient:
                 result["thinking"] = {
                     "tokens": thinking_tokens,
                     "blocks": thought_summaries,
-                    "block_count": len(thought_summaries)
+                    "block_count": len(thought_summaries),
                 }
 
             return result

@@ -5,8 +5,6 @@ Following TDD approach - these tests define expected behavior.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-import os
 
 
 @pytest.fixture
@@ -17,7 +15,7 @@ def gemini_client():
     client = GeminiClient(
         project_id="test-project",
         location="us-central1",
-        use_mock=True  # Use mock mode to avoid real API calls
+        use_mock=True,  # Use mock mode to avoid real API calls
     )
     return client
 
@@ -51,28 +49,21 @@ class TestGeminiModels:
 
     def test_supports_gemini_3_pro(self, gemini_client):
         """Client should support Gemini 3 Pro (flagship model)."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="Test prompt"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="Test prompt")
         assert response is not None
         assert "text" in response
 
     def test_supports_gemini_2_flash_thinking(self, gemini_client):
         """Client should support Gemini 2.0 Flash Thinking (reasoning-enabled)."""
         response = gemini_client.generate(
-            model="gemini-2.0-flash-thinking-exp",
-            prompt="Test prompt"
+            model="gemini-2.0-flash-thinking-exp", prompt="Test prompt"
         )
         assert response is not None
         assert "text" in response
 
     def test_supports_gemini_2_flash(self, gemini_client):
         """Client should support Gemini 2.0 Flash (baseline)."""
-        response = gemini_client.generate(
-            model="gemini-2.0-flash-exp",
-            prompt="Test prompt"
-        )
+        response = gemini_client.generate(model="gemini-2.0-flash-exp", prompt="Test prompt")
         assert response is not None
         assert "text" in response
 
@@ -82,10 +73,7 @@ class TestMockMode:
 
     def test_mock_mode_returns_realistic_response(self, gemini_client):
         """Mock mode should return realistic response structure."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="What is 2+2?"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="What is 2+2?")
 
         assert "text" in response
         assert "model" in response
@@ -96,10 +84,7 @@ class TestMockMode:
 
     def test_mock_mode_includes_token_usage(self, gemini_client):
         """Mock should include realistic token usage data."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="Test prompt"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="Test prompt")
 
         assert "usage" in response
         assert "input_tokens" in response["usage"]
@@ -114,12 +99,11 @@ class TestErrorHandling:
     def test_validates_model_name(self, gemini_client):
         """Client should validate model name before calling API."""
         with pytest.raises(ValueError) as exc_info:
-            gemini_client.generate(
-                model="invalid-model-name",
-                prompt="Test"
-            )
+            gemini_client.generate(model="invalid-model-name", prompt="Test")
 
-        assert "unsupported" in str(exc_info.value).lower() or "invalid" in str(exc_info.value).lower()
+        assert (
+            "unsupported" in str(exc_info.value).lower() or "invalid" in str(exc_info.value).lower()
+        )
 
 
 class TestResponseFormat:
@@ -127,10 +111,7 @@ class TestResponseFormat:
 
     def test_response_includes_required_fields(self, gemini_client):
         """Response should include all required fields."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="Hello"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="Hello")
 
         required_fields = ["text", "model", "usage"]
         for field in required_fields:
@@ -138,19 +119,13 @@ class TestResponseFormat:
 
     def test_response_text_is_string(self, gemini_client):
         """Response text should always be a string."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="Test"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="Test")
 
         assert isinstance(response["text"], str)
 
     def test_response_usage_has_token_counts(self, gemini_client):
         """Usage data should include input and output token counts."""
-        response = gemini_client.generate(
-            model="gemini-3-pro",
-            prompt="Test"
-        )
+        response = gemini_client.generate(model="gemini-3-pro", prompt="Test")
 
         usage = response["usage"]
         assert "input_tokens" in usage

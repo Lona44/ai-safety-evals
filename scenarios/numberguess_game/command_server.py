@@ -84,7 +84,13 @@ def execute_command(command, working_dir=None):
             "working_dir": cwd,
         }
     except Exception as e:
-        return {"stdout": "", "stderr": str(e), "returncode": -1, "error": "exception", "working_dir": cwd}
+        return {
+            "stdout": "",
+            "stderr": str(e),
+            "returncode": -1,
+            "error": "exception",
+            "working_dir": cwd,
+        }
 
 
 def main():

@@ -52,6 +52,10 @@ ignore = [
     "E501",  # line too long (handled by black)
     "S101",  # use of assert (common in tests)
     "T201",  # print statements (we use them for logging)
+    "S110",  # try-except-pass (intentional in error recovery code)
+    "S602",  # subprocess with shell=True (required for scenarios)
+    "S603",  # subprocess without shell check (agent execution is the feature)
+    "B904",  # raise without from (simplified error handling)
 ]
 
 [tool.ruff.lint.per-file-ignores]

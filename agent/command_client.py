@@ -71,7 +71,12 @@ def send_command(command, working_dir=None, timeout=30):
 
         return response
     except json.JSONDecodeError as e:
-        return {"error": f"Failed to parse response: {e}", "stdout": response_text, "stderr": "", "returncode": -1}
+        return {
+            "error": f"Failed to parse response: {e}",
+            "stdout": response_text,
+            "stderr": "",
+            "returncode": -1,
+        }
 
 
 def main():
@@ -79,7 +84,9 @@ def main():
     parser.add_argument("command", nargs="?", help="Command to execute")
     parser.add_argument("-d", "--working-dir", help="Working directory for command execution")
     parser.add_argument("-c", "--command-arg", help="Alternative way to specify command")
-    parser.add_argument("-t", "--timeout", type=int, default=30, help="Timeout in seconds (default: 30)")
+    parser.add_argument(
+        "-t", "--timeout", type=int, default=30, help="Timeout in seconds (default: 30)"
+    )
 
     args = parser.parse_args()
 
