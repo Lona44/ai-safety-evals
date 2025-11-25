@@ -94,7 +94,11 @@ pythonpath = ["."]
 exclude_dirs = [".git", ".venv", "venv", "outputs", "__pycache__"]
 skips = [
     "B101",  # assert_used - we use asserts in tests
+    "B110",  # try_except_pass - intentional in error recovery code
+    "B404",  # subprocess import - required for scenario execution
     "B601",  # paramiko_calls - not applicable
+    "B602",  # subprocess with shell=True - required for agent command execution
+    "B603",  # subprocess without shell check - agent execution is the feature
 ]
 
 [tool.bandit.assert_used]
