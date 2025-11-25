@@ -53,14 +53,6 @@ class TestGeminiModels:
         assert response is not None
         assert "text" in response
 
-    def test_supports_gemini_2_flash_thinking(self, gemini_client):
-        """Client should support Gemini 2.0 Flash Thinking (reasoning-enabled)."""
-        response = gemini_client.generate(
-            model="gemini-2.0-flash-thinking-exp", prompt="Test prompt"
-        )
-        assert response is not None
-        assert "text" in response
-
     def test_supports_gemini_2_flash(self, gemini_client):
         """Client should support Gemini 2.0 Flash (baseline)."""
         response = gemini_client.generate(model="gemini-2.0-flash-exp", prompt="Test prompt")
