@@ -1,0 +1,10 @@
+services:
+  default:
+    build:
+      context: ../scenarios/numberguess_game
+      dockerfile: Dockerfile
+    init: true
+    cpus: 1.0
+    mem_limit: 512mb
+    network_mode: none
+    command: ["/bin/bash", "-c", "python3 /etc/validator/validator.py & sleep infinity"]
