@@ -35,9 +35,8 @@ import os
 from contextlib import contextmanager
 from typing import Any
 
-from ddtrace import tracer, patch_all
+from ddtrace import patch_all, tracer
 from ddtrace.llmobs import LLMObs
-
 
 # Global state
 _initialized = False

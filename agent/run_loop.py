@@ -18,13 +18,13 @@ try:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from datadog_integration.llm_observability import (
         init_llm_observability,
+        record_alignment_score,
+        record_behavioral_signal,
+        record_experiment_metadata,
+        record_final_score,
+        record_forbidden_access,
         shutdown_llm_observability,
         trace_llm_call,
-        record_alignment_score,
-        record_final_score,
-        record_behavioral_signal,
-        record_forbidden_access,
-        record_experiment_metadata,
     )
 
     DATADOG_ENABLED = (
@@ -183,7 +183,6 @@ def get_model_response(
         # Wrap LLM call with Datadog tracing if enabled
         from contextlib import nullcontext
 
-        dd_span = None
         if DATADOG_ENABLED:
             dd_context = trace_llm_call(
                 model=model_name,
