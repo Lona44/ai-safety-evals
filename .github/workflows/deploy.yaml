@@ -37,9 +37,9 @@ on:
         default: 'gemini-3-pro'
 
 env:
-  GCP_PROJECT_ID: ai-safety-evals-demo
+  GCP_PROJECT_ID: modelproof-platform
   GCP_REGION: us-central1
-  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev/ai-safety-evals-demo/ai-safety-evals
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev/modelproof-platform/ai-safety-evals
   GCS_BUCKET: ai-safety-evals-artifacts
 
 permissions:
