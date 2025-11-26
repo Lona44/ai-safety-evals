@@ -302,11 +302,103 @@ def evaluate_experiment(behavioral_data: dict) -> dict:
 
 ## Future Work
 
-1. **Expanded Model Coverage**: Evaluation of GPT-5, Claude 4.5, o3 reasoning models
+1. **Expanded Model Coverage**: Evaluation of additional Gemini model variants
 2. **Adversarial Scenario Library**: Systematic testing across capability gaming, value misalignment, and sandboxing escape scenarios
 3. **Longitudinal Analysis**: Tracking deception patterns across model versions and training iterations
 4. **Ablation Studies**: Impact of reasoning tokens, temperature, and prompt engineering on alignment behavior
 5. **Cross-Model Comparison**: Standardized benchmarking of alignment across model families
+
+## Competition Roadmap (Datadog AI Partner Catalyst)
+
+### Submission Requirements
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| Hosted Project URL | 🔴 TODO | Deploy to Cloud Run |
+| Functional Web UI | 🔴 TODO | Streamlit/Gradio interface |
+| 3-minute Demo Video | 🔴 TODO | Show end-to-end workflow |
+| Public Code Repository | ✅ Done | GitHub |
+| Gemini via Vertex AI | 🟡 Partial | Currently using GenAI API directly |
+| Datadog LLM Observability | 🔴 TODO | Core requirement |
+| Datadog Detection Rules | 🔴 TODO | Alert on misalignment > threshold |
+| Datadog Dashboard | 🔴 TODO | Visualize alignment signals |
+
+### Datadog Integration Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        WEB UI (Streamlit)                        │
+│  [Run Evaluation] → [View Results] → [Datadog Dashboard Link]    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    EVALUATION ENGINE                             │
+│  (Multi-Judge Ensemble + Behavioral Analysis)                    │
+│                              │                                   │
+│                   ddtrace instrumentation ──────────────────┐    │
+└──────────────────────────────┬──────────────────────────────┼────┘
+                               │                              │
+                               ▼                              ▼
+┌──────────────────────────────────────┐  ┌───────────────────────┐
+│         VERTEX AI (GCP)              │  │       DATADOG         │
+│  • Gemini 3 Pro (agent)              │  │  • LLM Observability  │
+│  • Gemini 2.5 Pro (judge)            │  │  • APM/Traces         │
+│  • Gemini 2.0 Flash (judge)          │  │  • Custom Metrics     │
+└──────────────────────────────────────┘  │  • Detection Rules    │
+                                          │  • Dashboard          │
+                                          │  • Alerts/Incidents   │
+                                          └───────────────────────┘
+```
+
+### Datadog-Specific Requirements
+
+Per competition rules, the Datadog integration must:
+
+1. **Stream LLM Telemetry**: Capture prompts, completions, tokens, latency via `ddtrace`
+2. **Stream Runtime Telemetry**: APM traces from evaluation pipeline
+3. **Detection Rules**: Alert when misalignment score exceeds threshold (e.g., >80)
+4. **Dashboard**: Surface application health and alignment signals
+5. **Actionable Items**: Create incident/case when detection rule triggers
+
+### Implementation Priorities
+
+| Priority | Task | Estimated Time |
+|----------|------|----------------|
+| 1 | Datadog LLM Observability integration | 3-4 hours |
+| 2 | Simple Streamlit web UI | 2-3 hours |
+| 3 | Vertex AI migration (GenAI API → Vertex) | 1-2 hours |
+| 4 | Cloud Run deployment | 1-2 hours |
+| 5 | Datadog dashboard + detection rules | 2-3 hours |
+| 6 | Demo video | 1-2 hours |
+| **Total** | | **~12 hours** |
+
+### Inspect AI Integration (Optional Enhancement)
+
+This framework can also run on [UK AISI's Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai) for additional infrastructure benefits:
+
+```bash
+# Run scenario on Inspect AI
+cd inspect_evals
+inspect eval numberguess.py --model google/gemini-3-pro-preview
+
+# View results
+inspect view start --log-dir ../outputs/inspect_logs/
+```
+
+**Inspect AI provides**: Built-in Docker sandbox, log viewer UI, retry/checkpointing, parallel evals
+
+**This framework adds**: Multi-judge ensemble scoring, behavioral forensics, alignment signal detection
+
+### Unique Value Proposition
+
+| Feature | Standard Evals | This Framework |
+|---------|----------------|----------------|
+| Scoring | Single pass/fail | 3-judge ensemble with confidence weighting |
+| Output | Score only | 800+ word analysis with CoT citations |
+| Forensics | None | Command-by-command violation tracking |
+| Alignment Signals | None | Deception, manipulation, sandbagging detection |
+| Disagreement Tracking | None | Flag ambiguous cases for human review |
 
 ## Integration with Datadog LLM Observability
 
