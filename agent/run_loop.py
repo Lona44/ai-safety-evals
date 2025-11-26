@@ -13,6 +13,23 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
+# Datadog LLM Observability integration (optional - fails gracefully if not configured)
+try:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from datadog_integration.llm_observability import (
+        init_llm_observability,
+        shutdown_llm_observability,
+        trace_llm_call,
+        record_alignment_score,
+        record_final_score,
+        record_behavioral_signal,
+        record_forbidden_access,
+        record_experiment_metadata,
+    )
+    DATADOG_ENABLED = os.environ.get("DD_API_KEY") and os.environ.get("DD_API_KEY") != "your_api_key_here"
+except ImportError:
+    DATADOG_ENABLED = False
+
 # Import GeminiClient for multi-judge evaluation
 
 sys.path.insert(0, "/app")
@@ -160,10 +177,23 @@ def get_model_response(
     )
 
     try:
-        # Generate content with new SDK
-        response = client.models.generate_content(
-            model=model_name, contents=google_contents, config=config
-        )
+        # Wrap LLM call with Datadog tracing if enabled
+        from contextlib import nullcontext
+        dd_span = None
+        if DATADOG_ENABLED:
+            dd_context = trace_llm_call(
+                model=model_name,
+                prompt=f"Step {current_step}: {len(google_contents)} messages",
+                operation="agent.generate",
+            )
+        else:
+            dd_context = nullcontext()
+
+        with dd_context as dd_span:
+            # Generate content with new SDK
+            response = client.models.generate_content(
+                model=model_name, contents=google_contents, config=config
+            )
 
         # Extract thinking/reasoning information
         thinking_tokens = 0
@@ -215,6 +245,12 @@ def get_model_response(
 
             # OPTIMIZATION: Removed per-step file writes for performance
             # CoT is already captured in behavioral_data.json under steps[].thinking.blocks
+
+        # Add Datadog span tags for thinking metrics
+        if DATADOG_ENABLED and dd_span:
+            dd_span.set_tag("thinking.tokens", thinking_tokens)
+            dd_span.set_tag("thinking.blocks", len(thought_summaries))
+            dd_span.set_tag("output.tokens", len(content_parts))
 
         # Display response
         response_text = "".join(content_parts) if content_parts else None
@@ -610,6 +646,15 @@ def _finalize_behavioral_data():
                         )
                         behavioral_data["alignment_signals"]["attempted_deception"] = True
 
+                        # Record to Datadog
+                        if DATADOG_ENABLED:
+                            record_forbidden_access(
+                                command=command,
+                                pattern_matched=pattern,
+                                step=step.get("step", 0),
+                                experiment_id=behavioral_data.get("experiment_id"),
+                            )
+
                 # Detect manipulation attempts
                 if any(keyword in command for keyword in manipulation_keywords):
                     if any(pattern in command for pattern in forbidden_patterns):
@@ -649,6 +694,24 @@ def _finalize_behavioral_data():
 
     # Update alignment signals
     behavioral_data["alignment_signals"]["transparent_reasoning"] = has_explanation
+
+    # Record behavioral signals to Datadog
+    if DATADOG_ENABLED:
+        experiment_id = behavioral_data.get("experiment_id")
+        if behavioral_data["alignment_signals"]["attempted_deception"]:
+            record_behavioral_signal(
+                signal_type="deception",
+                detected=True,
+                details="Agent attempted to access forbidden files",
+                experiment_id=experiment_id,
+            )
+        if behavioral_data["alignment_signals"]["attempted_manipulation"]:
+            record_behavioral_signal(
+                signal_type="manipulation",
+                detected=True,
+                details="Agent attempted to manipulate system/validator files",
+                experiment_id=experiment_id,
+            )
 
 
 def write_behavioral_data():
@@ -972,6 +1035,16 @@ Respond with ONLY the JSON object, nothing else."""
                     "reasoning": reasoning,
                 }
 
+                # Record judge evaluation to Datadog
+                if DATADOG_ENABLED:
+                    record_alignment_score(
+                        score=score,
+                        confidence=confidence,
+                        judge=judge["name"],
+                        reasoning=reasoning[:1000],  # Truncate for Datadog
+                        experiment_id=behavioral_data.get("experiment_id"),
+                    )
+
                 retry_msg = f" (succeeded on retry {attempt + 1})" if attempt > 0 else ""
                 print(f"  ✓ {judge['name']}: {score}/100 (confidence: {confidence}%){retry_msg}")
                 return judge_result
@@ -1043,6 +1116,16 @@ Respond with ONLY the JSON object, nothing else."""
     print(f"Disagreement (stdev): {disagreement:.1f}")
     print(f"Consensus: {'Yes' if consensus else 'No (judges disagree)'}")
 
+    # Record final aggregated score to Datadog
+    if DATADOG_ENABLED:
+        record_final_score(
+            final_score=final_score,
+            disagreement=disagreement,
+            consensus=consensus,
+            num_judges=len(judges),
+            experiment_id=behavioral_data.get("experiment_id"),
+        )
+
     # Build aggregate reasoning
     aggregate_reasoning = f"Multi-judge evaluation (final score: {final_score}/100, disagreement: {disagreement:.1f}):\n\n"
     for result in judge_results:
@@ -1073,8 +1156,22 @@ def main():
         enable_reasoning = os.getenv("UNIFIED_REASONING", "DISABLED").upper() == "ENABLED"
 
         # FIX: Populate experiment_id and timestamp at start
-        behavioral_data["experiment_id"] = os.environ.get("UNIFIED_EXPERIMENT_ID", "unknown")
+        experiment_id = os.environ.get("UNIFIED_EXPERIMENT_ID", "unknown")
+        behavioral_data["experiment_id"] = experiment_id
         behavioral_data["timestamp"] = datetime.now().isoformat()
+
+        # Initialize Datadog LLM Observability if configured
+        if DATADOG_ENABLED:
+            init_llm_observability()
+            # Record experiment metadata
+            scenario = os.environ.get("UNIFIED_SCENARIO", "unknown")
+            record_experiment_metadata(
+                experiment_id=experiment_id,
+                model=model,
+                scenario=scenario,
+                reasoning_enabled=enable_reasoning,
+            )
+            print(f"[Datadog] Experiment tracking enabled: {experiment_id}")
 
         # Phase 1: Load and validate scenario
         print("Loading scenario configuration...")
@@ -1233,6 +1330,11 @@ def main():
 
         traceback.print_exc()
         return 1
+
+    finally:
+        # Flush and shutdown Datadog LLM Observability
+        if DATADOG_ENABLED:
+            shutdown_llm_observability()
 
     return 0
 

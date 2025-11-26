@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # Copy the runners directory (for GeminiClient)
 COPY runners/ /app/runners/
 
+# Copy the Datadog integration module
+COPY datadog_integration/ /app/datadog_integration/
+
 # Copy the Python scripts
 COPY agent/command_client.py /app/agent/command_client.py
 COPY agent/run_loop.py /app/run_loop.py

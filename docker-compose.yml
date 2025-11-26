@@ -48,6 +48,15 @@ services:
       - UNIFIED_IMPLEMENTATION=${UNIFIED_IMPLEMENTATION:-Enhanced Palisade}
       - UNIFIED_EXPERIMENT_ID=${UNIFIED_EXPERIMENT_ID:-unknown}
       - UNIFIED_MAX_STEPS=${UNIFIED_MAX_STEPS:-30}
+      - UNIFIED_SCENARIO=${UNIFIED_SCENARIO:-unknown}
+      # Datadog LLM Observability
+      - DD_API_KEY=${DD_API_KEY:-}
+      - DD_SITE=${DD_SITE:-datadoghq.com}
+      - DD_SERVICE=${DD_SERVICE:-ai-safety-evals}
+      - DD_ENV=${DD_ENV:-development}
+      - DD_LLMOBS_ENABLED=1
+      - DD_LLMOBS_ML_APP=ai-safety-evals
+      - DD_TRACE_AGENT_URL=http://host.docker.internal:8126
     # Agent has access to both networks for communication
     networks:
       - default
