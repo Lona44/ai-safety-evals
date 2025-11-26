@@ -70,7 +70,8 @@ jobs:
 
       - name: Build Dashboard Docker Image
         run: |
-          docker build -t ${{ env.ARTIFACT_REGISTRY }}/dashboard:${{ github.sha }} \
+          docker build --platform linux/amd64 \
+            -t ${{ env.ARTIFACT_REGISTRY }}/dashboard:${{ github.sha }} \
             -t ${{ env.ARTIFACT_REGISTRY }}/dashboard:latest \
             -f streamlit_app/Dockerfile \
             .
