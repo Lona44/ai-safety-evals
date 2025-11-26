@@ -143,20 +143,26 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Update Google API Key
-        if: secrets.GOOGLE_API_KEY != ''
         run: |
-          echo "${{ secrets.GOOGLE_API_KEY }}" | \
-          gcloud secrets versions add google-api-key --data-file=- --project=${{ env.GCP_PROJECT_ID }} || \
-          echo "${{ secrets.GOOGLE_API_KEY }}" | \
-          gcloud secrets create google-api-key --data-file=- --replication-policy=automatic --project=${{ env.GCP_PROJECT_ID }}
+          if [ -n "${{ secrets.GOOGLE_API_KEY }}" ]; then
+            echo "${{ secrets.GOOGLE_API_KEY }}" | \
+            gcloud secrets versions add google-api-key --data-file=- --project=${{ env.GCP_PROJECT_ID }} || \
+            echo "${{ secrets.GOOGLE_API_KEY }}" | \
+            gcloud secrets create google-api-key --data-file=- --replication-policy=automatic --project=${{ env.GCP_PROJECT_ID }}
+          else
+            echo "GOOGLE_API_KEY secret not set, skipping"
+          fi
 
       - name: Update Datadog API Key
-        if: secrets.DD_API_KEY != ''
         run: |
-          echo "${{ secrets.DD_API_KEY }}" | \
-          gcloud secrets versions add dd-api-key --data-file=- --project=${{ env.GCP_PROJECT_ID }} || \
-          echo "${{ secrets.DD_API_KEY }}" | \
-          gcloud secrets create dd-api-key --data-file=- --replication-policy=automatic --project=${{ env.GCP_PROJECT_ID }}
+          if [ -n "${{ secrets.DD_API_KEY }}" ]; then
+            echo "${{ secrets.DD_API_KEY }}" | \
+            gcloud secrets versions add dd-api-key --data-file=- --project=${{ env.GCP_PROJECT_ID }} || \
+            echo "${{ secrets.DD_API_KEY }}" | \
+            gcloud secrets create dd-api-key --data-file=- --replication-policy=automatic --project=${{ env.GCP_PROJECT_ID }}
+          else
+            echo "DD_API_KEY secret not set, skipping"
+          fi
 
   run-experiment:
     name: Run Experiment
