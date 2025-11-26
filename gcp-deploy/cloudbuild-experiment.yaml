@@ -75,21 +75,21 @@ steps:
         pip3 install docker-compose --quiet
 
         # Generate experiment ID if not provided
-        EXPERIMENT_ID="${_EXPERIMENT_ID}"
-        if [ -z "$EXPERIMENT_ID" ]; then
-          EXPERIMENT_ID="${_SCENARIO}_$(date +%Y%m%d_%H%M%S)_cloudbuild"
+        EXP_ID="${_EXPERIMENT_ID}"
+        if [ -z "$$EXP_ID" ]; then
+          EXP_ID="${_SCENARIO}_$$(date +%Y%m%d_%H%M%S)_cloudbuild"
         fi
         echo "=========================================="
-        echo "Experiment ID: $EXPERIMENT_ID"
+        echo "Experiment ID: $$EXP_ID"
         echo "=========================================="
 
         # Get secrets and create .env file
-        GOOGLE_API_KEY=$(gcloud secrets versions access latest --secret=google-api-key --project=$PROJECT_ID)
-        DD_API_KEY=$(gcloud secrets versions access latest --secret=dd-api-key --project=$PROJECT_ID)
+        GKEY=$$(gcloud secrets versions access latest --secret=google-api-key --project=$PROJECT_ID)
+        DKEY=$$(gcloud secrets versions access latest --secret=dd-api-key --project=$PROJECT_ID)
 
-        cat > .env << EOF
-        GOOGLE_API_KEY=$GOOGLE_API_KEY
-        DD_API_KEY=$DD_API_KEY
+        cat > .env << ENVEOF
+        GOOGLE_API_KEY=$$GKEY
+        DD_API_KEY=$$DKEY
         DD_SITE=ap2.datadoghq.com
         DD_SERVICE=ai-safety-evals
         DD_ENV=production
@@ -98,25 +98,25 @@ steps:
         UNIFIED_MODEL=${_MODEL}
         UNIFIED_REASONING=${_REASONING}
         UNIFIED_MAX_STEPS=30
-        EOF
+        ENVEOF
 
         echo "Running experiment: scenario=${_SCENARIO}, model=${_MODEL}, reasoning=${_REASONING}"
         echo ""
 
         # Run the experiment using run.sh
         chmod +x run.sh
-        ./run.sh -s scenarios/${_SCENARIO} -n "$EXPERIMENT_ID" || true
+        ./run.sh -s scenarios/${_SCENARIO} -n "$$EXP_ID" || true
 
         # Upload results to GCS
         echo ""
         echo "=========================================="
         echo "Uploading results..."
         echo "=========================================="
-        if [ -d "outputs/$EXPERIMENT_ID" ]; then
-          gsutil -m cp -r "outputs/$EXPERIMENT_ID" "gs://${_GCS_BUCKET}/experiments/"
-          echo "Results uploaded to: gs://${_GCS_BUCKET}/experiments/$EXPERIMENT_ID"
+        if [ -d "outputs/$$EXP_ID" ]; then
+          gsutil -m cp -r "outputs/$$EXP_ID" "gs://${_GCS_BUCKET}/experiments/"
+          echo "Results uploaded to: gs://${_GCS_BUCKET}/experiments/$$EXP_ID"
         else
-          echo "Warning: Output directory not found at outputs/$EXPERIMENT_ID"
+          echo "Warning: Output directory not found at outputs/$$EXP_ID"
           echo "Available outputs:"
           ls -la outputs/ || echo "No outputs directory"
         fi
