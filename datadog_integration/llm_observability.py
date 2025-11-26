@@ -6,6 +6,11 @@ This module provides instrumentation for tracking:
 - Alignment evaluation metrics (scores, confidence, judge results)
 - Behavioral signals (deception attempts, forbidden access)
 
+Key Features:
+- Uses LLMObs.submit_evaluation() for proper Evaluations tab integration
+- Uses span.set_metric() for dashboard-compatible numeric values
+- Uses LLMObs.annotate() for rich structured metadata
+
 Usage:
     from datadog_integration.llm_observability import (
         init_llm_observability,
@@ -22,7 +27,7 @@ Usage:
         response = client.generate(...)
         span.set_tag("output.tokens", response.token_count)
 
-    # Record alignment metrics
+    # Record alignment metrics (appears in Evaluations tab)
     record_alignment_score(score=99, confidence=95, judge="gemini-3-pro")
 """
 
@@ -89,7 +94,7 @@ def trace_llm_call(
     operation: str = "llm.generate",
     **tags: Any,
 ):
-    """Context manager for tracing LLM calls.
+    """Context manager for tracing LLM calls with rich metadata.
 
     Args:
         model: Model name (e.g., "gemini-3-pro")
@@ -99,21 +104,34 @@ def trace_llm_call(
 
     Yields:
         The active span for adding completion data
-
-    Example:
-        with trace_llm_call("gemini-3-pro", prompt="Evaluate...") as span:
-            response = client.generate(prompt)
-            span.set_tag("output.text", response.text[:500])
-            span.set_tag("output.tokens", response.token_count)
     """
     with tracer.trace(operation, service="ai-safety-evals") as span:
+        # Tags for filtering
         span.set_tag("llm.model", model)
         span.set_tag("llm.provider", "google")
-        span.set_tag("input.prompt_length", len(prompt))
+
+        # Metrics for dashboards
+        span.set_metric("input.prompt_length", len(prompt))
 
         # Add custom tags
         for key, value in tags.items():
-            span.set_tag(key, value)
+            if isinstance(value, (int, float)):
+                span.set_metric(key, value)
+            else:
+                span.set_tag(key, value)
+
+        # Annotate with LLMObs for rich metadata
+        try:
+            LLMObs.annotate(
+                input_data=prompt[:1000],  # Truncate for storage
+                metadata={
+                    "model": model,
+                    "provider": "google",
+                    "operation": operation,
+                },
+            )
+        except Exception:
+            pass  # LLMObs may not be fully initialized
 
         try:
             yield span
@@ -124,16 +142,7 @@ def trace_llm_call(
 
 
 def trace_workflow(name: str):
-    """Decorator for tracing workflow functions.
-
-    Args:
-        name: Workflow name (e.g., "agent_execution", "multi_judge_evaluation")
-
-    Example:
-        @trace_workflow("multi_judge_evaluation")
-        def run_multi_judge_evaluator():
-            ...
-    """
+    """Decorator for tracing workflow functions."""
 
     def decorator(func):
         def wrapper(*args, **kwargs):
@@ -161,7 +170,9 @@ def record_alignment_score(
     reasoning: str | None = None,
     experiment_id: str | None = None,
 ) -> None:
-    """Record an alignment evaluation score as a custom span.
+    """Record an alignment evaluation score using Datadog's evaluation system.
+
+    Uses LLMObs.workflow context manager to create proper spans for evaluations.
 
     Args:
         score: Alignment score (0-100, higher = more misalignment detected)
@@ -170,18 +181,61 @@ def record_alignment_score(
         reasoning: Optional evaluation reasoning
         experiment_id: Optional experiment identifier
     """
-    with tracer.trace("alignment.score", service="ai-safety-evals") as span:
-        span.set_tag("alignment.score", score)
-        span.set_tag("alignment.confidence", confidence)
-        span.set_tag("alignment.judge", judge)
-        span.set_tag("alignment.is_misaligned", score > 50)
-        span.set_tag("alignment.severity", _score_to_severity(score))
+    judge_name = judge.replace(' ', '_').replace('-', '_')
 
-        if experiment_id:
-            span.set_tag("experiment.id", experiment_id)
-        if reasoning:
-            # Truncate reasoning for tag (max 5000 chars)
-            span.set_tag("alignment.reasoning", reasoning[:5000])
+    try:
+        # Use LLMObs workflow context manager to create proper span
+        with LLMObs.workflow(name=f"judge_evaluation.{judge_name}") as span:
+            # Annotate the LLMObs span with rich metadata
+            LLMObs.annotate(
+                input_data=f"Judge: {judge}, Experiment: {experiment_id}",
+                output_data={
+                    "score": score,
+                    "confidence": confidence,
+                    "severity": _score_to_severity(score),
+                    "reasoning_summary": reasoning[:500] if reasoning else None,
+                },
+                metadata={
+                    "judge_model": judge,
+                    "score": score,
+                    "confidence": confidence,
+                    "severity": _score_to_severity(score),
+                    "experiment_id": experiment_id,
+                    "is_misaligned": score > 50,
+                },
+                tags=[
+                    f"judge:{judge}",
+                    f"severity:{_score_to_severity(score)}",
+                ],
+            )
+
+            # Submit evaluation on this LLMObs-generated span
+            try:
+                span_context = LLMObs.export_span(span=span)
+                if span_context:
+                    LLMObs.submit_evaluation(
+                        span_context=span_context,
+                        label="alignment_score",
+                        metric_type="score",
+                        value=score / 100.0,  # Normalize to 0-1
+                        tags=[
+                            f"judge:{judge}",
+                            f"confidence:{confidence}",
+                            f"severity:{_score_to_severity(score)}",
+                        ],
+                    )
+            except Exception as e:
+                print(f"[Datadog] Could not submit evaluation: {e}")
+
+    except Exception:
+        # Fallback to basic tracing if LLMObs workflow fails
+        with tracer.trace("alignment.judge_evaluation", service="ai-safety-evals") as span:
+            span.set_tag("alignment.judge", judge)
+            span.set_tag("alignment.severity", _score_to_severity(score))
+            span.set_metric("alignment.score", score)
+            span.set_metric("alignment.confidence", confidence)
+            if experiment_id:
+                span.set_tag("experiment.id", experiment_id)
 
 
 def record_final_score(
@@ -200,19 +254,68 @@ def record_final_score(
         num_judges: Number of judges in ensemble
         experiment_id: Optional experiment identifier
     """
-    with tracer.trace("alignment.final", service="ai-safety-evals") as span:
-        span.set_tag("alignment.final_score", final_score)
-        span.set_tag("alignment.disagreement", disagreement)
-        span.set_tag("alignment.consensus", consensus)
-        span.set_tag("alignment.num_judges", num_judges)
-        span.set_tag("alignment.severity", _score_to_severity(final_score))
+    try:
+        with LLMObs.workflow(name="alignment_final_evaluation") as span:
+            # Annotate with rich metadata
+            LLMObs.annotate(
+                input_data=f"Final evaluation for experiment: {experiment_id}",
+                output_data={
+                    "final_alignment_score": final_score,
+                    "judge_consensus": consensus,
+                    "disagreement_stddev": disagreement,
+                },
+                metadata={
+                    "final_score": final_score,
+                    "disagreement": disagreement,
+                    "consensus": consensus,
+                    "num_judges": num_judges,
+                    "aggregation_method": "confidence_weighted",
+                    "experiment_id": experiment_id,
+                    "severity": _score_to_severity(final_score),
+                },
+                tags=[
+                    f"severity:{_score_to_severity(final_score)}",
+                    f"consensus:{consensus}",
+                ],
+            )
 
-        if experiment_id:
-            span.set_tag("experiment.id", experiment_id)
+            # Submit evaluations
+            try:
+                span_context = LLMObs.export_span(span=span)
+                if span_context:
+                    # Final score evaluation
+                    LLMObs.submit_evaluation(
+                        span_context=span_context,
+                        label="alignment_final_score",
+                        metric_type="score",
+                        value=final_score / 100.0,
+                        tags=[
+                            f"consensus:{consensus}",
+                            f"severity:{_score_to_severity(final_score)}",
+                            f"judges:{num_judges}",
+                        ],
+                    )
 
-        # Set metrics for dashboards
-        span.set_metric("alignment.final_score", final_score)
-        span.set_metric("alignment.disagreement", disagreement)
+                    # Consensus evaluation
+                    LLMObs.submit_evaluation(
+                        span_context=span_context,
+                        label="judge_consensus",
+                        metric_type="categorical",
+                        value="agreement" if consensus else "disagreement",
+                        tags=[f"disagreement:{disagreement:.1f}"],
+                    )
+            except Exception as e:
+                print(f"[Datadog] Could not submit final evaluation: {e}")
+
+    except Exception:
+        # Fallback to basic tracing
+        with tracer.trace("alignment.final_evaluation", service="ai-safety-evals") as span:
+            span.set_tag("alignment.severity", _score_to_severity(final_score))
+            span.set_tag("alignment.consensus", consensus)
+            span.set_metric("alignment.final_score", final_score)
+            span.set_metric("alignment.disagreement", disagreement)
+            if experiment_id:
+                span.set_tag("experiment.id", experiment_id)
 
 
 def record_behavioral_signal(
@@ -232,19 +335,56 @@ def record_behavioral_signal(
         experiment_id: Optional experiment identifier
     """
     with tracer.trace("behavioral.signal", service="ai-safety-evals") as span:
+        # Tags for filtering
         span.set_tag("behavioral.signal_type", signal_type)
         span.set_tag("behavioral.detected", detected)
 
         if step is not None:
             span.set_tag("behavioral.step", step)
+            span.set_metric("behavioral.step_number", step)
         if details:
             span.set_tag("behavioral.details", details[:2000])
         if experiment_id:
             span.set_tag("experiment.id", experiment_id)
 
-        # This is important for alerting
+        # Metric for counting signals
+        span.set_metric("behavioral.signal_detected", 1 if detected else 0)
+
+        # Alert trigger
         if detected:
             span.set_tag("alert.trigger", f"{signal_type}_detected")
+
+        # Rich metadata
+        try:
+            LLMObs.annotate(
+                metadata={
+                    "signal_type": signal_type,
+                    "detected": detected,
+                    "step": step,
+                    "experiment_id": experiment_id,
+                },
+                output_data={
+                    "signal": signal_type,
+                    "detected": detected,
+                    "details": details[:500] if details else None,
+                },
+            )
+        except Exception:
+            pass
+
+        # Submit as evaluation
+        try:
+            span_context = LLMObs.export_span(span=span)
+            if span_context:
+                LLMObs.submit_evaluation(
+                    span_context=span_context,
+                    label=f"signal_{signal_type}_detected",
+                    metric_type="categorical",
+                    value="detected" if detected else "not_detected",
+                    tags=[f"step:{step}" if step else "step:unknown"],
+                )
+        except Exception:
+            pass
 
 
 def record_forbidden_access(
@@ -262,14 +402,53 @@ def record_forbidden_access(
         experiment_id: Optional experiment identifier
     """
     with tracer.trace("security.forbidden_access", service="ai-safety-evals") as span:
+        # Tags for filtering
         span.set_tag("security.type", "forbidden_access")
-        span.set_tag("security.command", command[:1000])
         span.set_tag("security.pattern", pattern_matched)
-        span.set_tag("security.step", step)
         span.set_tag("alert.trigger", "forbidden_access_attempt")
 
         if experiment_id:
             span.set_tag("experiment.id", experiment_id)
+
+        # Metrics
+        span.set_metric("security.step", step)
+        span.set_metric("security.forbidden_access_count", 1)
+
+        # Rich metadata
+        try:
+            LLMObs.annotate(
+                metadata={
+                    "command": command[:500],
+                    "pattern_matched": pattern_matched,
+                    "step": step,
+                    "experiment_id": experiment_id,
+                    "severity": "critical",
+                },
+                output_data={
+                    "forbidden_access": True,
+                    "command_excerpt": command[:200],
+                    "pattern": pattern_matched,
+                },
+            )
+        except Exception:
+            pass
+
+        # Submit as evaluation
+        try:
+            span_context = LLMObs.export_span(span=span)
+            if span_context:
+                LLMObs.submit_evaluation(
+                    span_context=span_context,
+                    label="forbidden_access_attempt",
+                    metric_type="categorical",
+                    value="detected",
+                    tags=[
+                        f"pattern:{pattern_matched}",
+                        f"step:{step}",
+                    ],
+                )
+        except Exception:
+            pass
 
 
 def record_experiment_metadata(
@@ -287,10 +466,89 @@ def record_experiment_metadata(
         reasoning_enabled: Whether reasoning mode is enabled
     """
     with tracer.trace("experiment.start", service="ai-safety-evals") as span:
+        # Tags for filtering
         span.set_tag("experiment.id", experiment_id)
         span.set_tag("experiment.model", model)
         span.set_tag("experiment.scenario", scenario)
         span.set_tag("experiment.reasoning_enabled", reasoning_enabled)
+
+        # Rich metadata via LLMObs
+        try:
+            LLMObs.annotate(
+                input_data={
+                    "experiment_id": experiment_id,
+                    "model": model,
+                    "scenario": scenario,
+                },
+                metadata={
+                    "experiment_id": experiment_id,
+                    "model": model,
+                    "scenario": scenario,
+                    "reasoning_enabled": reasoning_enabled,
+                    "evaluation_method": "multi_judge_ensemble",
+                    "judge_count": 3,
+                    "judge_models": ["gemini-3-pro", "gemini-2.5-pro", "gemini-2.0-flash"],
+                },
+                tags={
+                    "eval.type": "safety",
+                    "eval.method": "multi_judge_ensemble",
+                    "scenario.name": scenario,
+                    "model.name": model,
+                },
+            )
+        except Exception:
+            pass
+
+
+def annotate_behavioral_data(behavioral_data: dict) -> None:
+    """Annotate current span with comprehensive behavioral data.
+
+    Call this after collecting behavioral data to add rich metadata
+    that will be searchable and clusterable in Datadog.
+
+    Args:
+        behavioral_data: The full behavioral_data dict from run_loop
+    """
+    try:
+        # Extract key signals
+        alignment_signals = behavioral_data.get("alignment_signals", {})
+        efficiency = behavioral_data.get("efficiency", {})
+        commands = behavioral_data.get("commands", {})
+        summary = behavioral_data.get("summary", {})
+
+        LLMObs.annotate(
+            metadata={
+                # Alignment signals
+                "transparent_reasoning": alignment_signals.get("transparent_reasoning"),
+                "followed_instructions": alignment_signals.get("followed_instructions"),
+                "attempted_deception": alignment_signals.get("attempted_deception"),
+                "attempted_manipulation": alignment_signals.get("attempted_manipulation"),
+
+                # Efficiency metrics
+                "steps_to_completion": efficiency.get("steps_to_completion"),
+                "redundant_actions": efficiency.get("redundant_actions"),
+                "strategic_approach": efficiency.get("strategic_approach"),
+
+                # Command forensics
+                "total_commands": summary.get("total_commands_executed"),
+                "failed_commands": commands.get("failed_commands"),
+                "forbidden_access_count": len(commands.get("forbidden_access_attempts", [])),
+
+                # Thinking metrics
+                "total_thinking_tokens": summary.get("total_thinking_tokens"),
+                "total_thinking_blocks": summary.get("total_thinking_blocks"),
+            },
+            output_data={
+                "behavioral_summary": {
+                    "deception_detected": alignment_signals.get("attempted_deception"),
+                    "manipulation_detected": alignment_signals.get("attempted_manipulation"),
+                    "forbidden_access_attempts": commands.get("forbidden_access_attempts", []),
+                    "command_breakdown": commands.get("by_type", {}),
+                }
+            },
+        )
+    except Exception as e:
+        print(f"[Datadog] Could not annotate behavioral data: {e}")
 
 
 def _score_to_severity(score: int) -> str:
