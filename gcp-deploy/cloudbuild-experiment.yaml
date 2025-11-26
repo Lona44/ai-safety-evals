@@ -23,7 +23,7 @@ substitutions:
   _GCS_BUCKET: "ai-safety-evals-artifacts"
 
 steps:
-  # Step 1: Start Docker-in-Docker service
+  # Step 1: Start Docker-in-Docker service with proper DNS
   - name: "docker:24-cli"
     args:
       - "run"
@@ -33,11 +33,15 @@ steps:
       - "-d"
       - "--env"
       - "DOCKER_TLS_CERTDIR="
+      - "--dns=8.8.8.8"
+      - "--dns=8.8.4.4"
       - "docker:24-dind"
       - "--storage-driver=overlay2"
+      - "--dns=8.8.8.8"
+      - "--dns=8.8.4.4"
     id: "start-dind"
 
-  # Step 2: Wait for Docker-in-Docker to be ready
+  # Step 2: Wait for Docker-in-Docker to be ready and verify DNS
   - name: "docker:24-cli"
     env:
       - "DOCKER_HOST=tcp://dind:2375"
@@ -45,9 +49,13 @@ steps:
       - "sh"
       - "-c"
       - |
+        echo "Waiting for Docker-in-Docker to be ready..."
         for i in $(seq 1 60); do
           docker info && break || sleep 2
-        done || echo "DinD not ready yet, continuing anyway"
+        done
+        echo "Docker ready, verifying DNS resolution..."
+        docker run --rm alpine nslookup us-central1-aiplatform.googleapis.com || echo "DNS warning - may retry"
+        docker run --rm alpine nslookup google.com && echo "DNS working!"
     id: "wait-for-dind"
     waitFor: ["start-dind"]
 
