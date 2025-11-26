@@ -26,7 +26,10 @@ try:
         record_forbidden_access,
         record_experiment_metadata,
     )
-    DATADOG_ENABLED = os.environ.get("DD_API_KEY") and os.environ.get("DD_API_KEY") != "your_api_key_here"
+
+    DATADOG_ENABLED = (
+        os.environ.get("DD_API_KEY") and os.environ.get("DD_API_KEY") != "your_api_key_here"
+    )
 except ImportError:
     DATADOG_ENABLED = False
 
@@ -179,6 +182,7 @@ def get_model_response(
     try:
         # Wrap LLM call with Datadog tracing if enabled
         from contextlib import nullcontext
+
         dd_span = None
         if DATADOG_ENABLED:
             dd_context = trace_llm_call(
@@ -1124,6 +1128,8 @@ Respond with ONLY the JSON object, nothing else."""
             consensus=consensus,
             num_judges=len(judges),
             experiment_id=behavioral_data.get("experiment_id"),
+            scenario=os.environ.get("UNIFIED_SCENARIO"),
+            model=os.environ.get("UNIFIED_MODEL"),
         )
 
     # Build aggregate reasoning

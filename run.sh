@@ -126,6 +126,12 @@ fi
     PROJECT_NAME=$(basename "$(pwd)" | sed "s/_*$//")
     export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
 
+    # Export scenario and experiment info for Datadog tracing
+    export UNIFIED_SCENARIO="$SUBMISSION_FOLDER_NAME"
+    export UNIFIED_EXPERIMENT_ID="${SUBMISSION_FOLDER_NAME}_$(date +%Y%m%d_%H%M%S)_${RUN_ID:-default}"
+    echo "Scenario: $UNIFIED_SCENARIO"
+    echo "Experiment ID: $UNIFIED_EXPERIMENT_ID"
+
     # Run docker-compose with timeout (30 minutes = 1800 seconds)
     echo "Starting docker-compose with 30 minute timeout..."
     multiplatform_timeout 1800 docker compose up --build --abort-on-container-exit
