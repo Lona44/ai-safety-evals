@@ -3,15 +3,27 @@ AI Safety Evaluations Dashboard
 
 A Streamlit web UI for running and monitoring AI safety experiments
 with Datadog LLM Observability integration.
+
+Deployed to Cloud Run, authenticates to Vertex AI via service account.
 """
 
 import json
 import os
+import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+
+# Optional GCP imports - gracefully degrade if not available
+try:
+    from google.cloud import storage
+    from google.cloud.devtools import cloudbuild_v1
+
+    GCP_AVAILABLE = True
+except ImportError:
+    GCP_AVAILABLE = False
 
 # Page configuration
 st.set_page_config(
@@ -23,7 +35,8 @@ st.set_page_config(
 
 # Configuration
 GCS_BUCKET = os.getenv("GCS_BUCKET", "ai-safety-evals-artifacts")
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "ai-safety-evals-demo")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "modelproof-platform")
+GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 LOCAL_OUTPUTS_DIR = Path("outputs")
 
 # Available models and scenarios
@@ -74,6 +87,154 @@ def get_local_experiments():
                 experiments.append(exp_data)
 
     return experiments
+
+
+def trigger_cloud_build_experiment(
+    scenario: str,
+    model: str,
+    reasoning: bool,
+) -> tuple[str | None, str | None, str | None]:
+    """
+    Trigger an experiment via Cloud Build using Python client.
+
+    Returns: (experiment_id, build_id, error_message)
+    """
+    if not GCP_AVAILABLE:
+        return None, None, "GCP client libraries not available. Run experiments via CLI."
+
+    # Generate unique experiment ID
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    unique_hash = hashlib.sha256(f"{timestamp}{scenario}{model}".encode()).hexdigest()[:8]
+    experiment_id = f"{scenario}_{timestamp}_{unique_hash}"
+
+    try:
+        client = cloudbuild_v1.CloudBuildClient()
+
+        # Define build steps inline (mirrors cloudbuild-experiment.yaml)
+        build = cloudbuild_v1.Build(
+            substitutions={
+                "_SCENARIO": scenario,
+                "_MODEL": model,
+                "_REASONING": "true" if reasoning else "false",
+                "_EXPERIMENT_ID": experiment_id,
+                "_GCS_BUCKET": GCS_BUCKET,
+            },
+            steps=[
+                # Step 1: Clone repo
+                cloudbuild_v1.BuildStep(
+                    name="gcr.io/cloud-builders/git",
+                    args=["clone", "https://github.com/Lona44/ai-safety-evals.git", "/workspace/repo"],
+                    id="clone",
+                ),
+                # Step 2: Run experiment with Docker Compose
+                cloudbuild_v1.BuildStep(
+                    name="docker/compose:1.29.2",
+                    args=[
+                        "-f", "/workspace/repo/docker-compose.yml",
+                        "run", "--rm",
+                        "-e", f"UNIFIED_SCENARIO={scenario}",
+                        "-e", f"UNIFIED_MODEL={model}",
+                        "-e", f"UNIFIED_REASONING={'true' if reasoning else 'false'}",
+                        "-e", f"UNIFIED_EXPERIMENT_ID={experiment_id}",
+                        "agent",
+                    ],
+                    id="run-experiment",
+                    wait_for=["clone"],
+                ),
+                # Step 3: Upload results to GCS
+                cloudbuild_v1.BuildStep(
+                    name="gcr.io/cloud-builders/gsutil",
+                    args=[
+                        "-m", "cp", "-r",
+                        f"/workspace/repo/outputs/{experiment_id}",
+                        f"gs://{GCS_BUCKET}/experiments/",
+                    ],
+                    id="upload",
+                    wait_for=["run-experiment"],
+                ),
+            ],
+            timeout={"seconds": 1800},  # 30 minutes
+            options=cloudbuild_v1.BuildOptions(
+                machine_type=cloudbuild_v1.BuildOptions.MachineType.E2_HIGHCPU_8,
+            ),
+        )
+
+        # Submit the build (use global location for simpler setup)
+        operation = client.create_build(
+            request={"project_id": GCP_PROJECT_ID, "build": build}
+        )
+        build_id = operation.metadata.build.id
+
+        return experiment_id, build_id, None
+
+    except Exception as e:
+        return None, None, f"Error: {str(e)}"
+
+
+def get_build_status(build_id: str) -> dict:
+    """Get the status of a Cloud Build using Python client."""
+    if not GCP_AVAILABLE:
+        return {}
+
+    try:
+        client = cloudbuild_v1.CloudBuildClient()
+        build = client.get_build(project_id=GCP_PROJECT_ID, id=build_id)
+        return {
+            "status": build.status.name,
+            "id": build.id,
+            "create_time": str(build.create_time),
+        }
+    except Exception:
+        pass
+
+    return {}
+
+
+def get_gcs_experiments() -> list[dict]:
+    """Get list of experiments from GCS bucket using Python client."""
+    if not GCP_AVAILABLE:
+        return []
+
+    experiments = []
+    try:
+        client = storage.Client(project=GCP_PROJECT_ID)
+        bucket = client.bucket(GCS_BUCKET)
+
+        # List all experiment directories
+        blobs = bucket.list_blobs(prefix="experiments/", delimiter="/")
+
+        # The prefixes contain the "directories"
+        for prefix in blobs.prefixes:
+            exp_id = prefix.rstrip("/").split("/")[-1]
+            if exp_id and not exp_id.startswith("."):
+                experiments.append({
+                    "id": exp_id,
+                    "path": f"gs://{GCS_BUCKET}/{prefix}",
+                    "source": "gcs",
+                })
+    except Exception:
+        pass
+
+    return experiments
+
+
+def download_gcs_result(experiment_id: str) -> dict | None:
+    """Download result.json from GCS for an experiment using Python client."""
+    if not GCP_AVAILABLE:
+        return None
+
+    try:
+        client = storage.Client(project=GCP_PROJECT_ID)
+        bucket = client.bucket(GCS_BUCKET)
+        blob = bucket.blob(f"experiments/{experiment_id}/result.json")
+
+        if blob.exists():
+            content = blob.download_as_text()
+            return json.loads(content)
+    except Exception:
+        pass
+
+    return None
 
 
 def run_local_experiment(scenario: str, model: str, reasoning: bool):
@@ -236,14 +397,38 @@ if page == "Dashboard":
     # Recent experiments
     st.header("Recent Experiments")
 
-    experiments = get_local_experiments()
+    # Get experiments from both local and GCS
+    local_experiments = get_local_experiments()
+    gcs_experiments = get_gcs_experiments()
+
+    # Combine and deduplicate
+    all_exp_ids = set()
+    experiments = []
+
+    for exp in local_experiments:
+        if exp["id"] not in all_exp_ids:
+            all_exp_ids.add(exp["id"])
+            experiments.append(exp)
+
+    for exp in gcs_experiments:
+        if exp["id"] not in all_exp_ids:
+            all_exp_ids.add(exp["id"])
+            # Load result from GCS
+            exp["result"] = download_gcs_result(exp["id"])
+            experiments.append(exp)
 
     if not experiments:
         st.info("No experiments found. Run an experiment to see results here.")
     else:
         for exp in experiments[:10]:
-            with st.expander(f"**{exp['id']}** - {exp['timestamp'].strftime('%Y-%m-%d %H:%M')}"):
-                result = exp.get("result", {})
+            source_badge = " (Cloud)" if exp.get("source") == "gcs" else " (Local)"
+            timestamp_str = (
+                exp["timestamp"].strftime("%Y-%m-%d %H:%M")
+                if "timestamp" in exp
+                else ""
+            )
+            with st.expander(f"**{exp['id']}**{source_badge} {timestamp_str}"):
+                result = exp.get("result") or {}
                 behavioral = exp.get("behavioral", {})
 
                 col1, col2, col3 = st.columns([2, 1, 1])
@@ -275,6 +460,13 @@ if page == "Dashboard":
 elif page == "Run Experiment":
     st.title("Run New Experiment")
 
+    st.markdown(
+        """
+        Run AI safety evaluation experiments on Google Cloud. Experiments use
+        **Vertex AI** for model inference and results are stored in **Cloud Storage**.
+        """
+    )
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -293,7 +485,7 @@ elif page == "Run Experiment":
 
         st.info(
             """
-            **Reasoning Mode**: When enabled, the model uses high-level thinking
+            **Reasoning Mode**: When enabled, the model uses extended thinking
             for complex problem solving. This produces richer chain-of-thought
             data for alignment analysis.
             """
@@ -301,26 +493,59 @@ elif page == "Run Experiment":
 
     st.markdown("---")
 
-    # Run button
-    if st.button("Run Experiment", type="primary", use_container_width=True):
-        with st.spinner("Starting experiment..."):
-            st.info(f"Running {SCENARIOS[scenario]} with {MODELS[model]} (reasoning={reasoning})")
+    # Check for running builds in session state
+    if "running_build" in st.session_state:
+        build_info = st.session_state["running_build"]
+        build_status = get_build_status(build_info["build_id"])
+        status = build_status.get("status", "UNKNOWN")
 
-            # For local runs
-            st.warning(
-                """
-                **Note**: Local experiment execution requires Docker and the full
-                repository setup. For cloud execution, use the GCP Cloud Build integration.
-
-                ```bash
-                ./gcp-deploy/run-experiment.sh -s """
-                + scenario
-                + " -m "
-                + model
-                + """
-                ```
-                """
+        if status == "WORKING":
+            st.warning(f"Experiment **{build_info['experiment_id']}** is running...")
+            st.markdown(
+                f"[View in Cloud Console](https://console.cloud.google.com/cloud-build/builds;region={GCP_REGION}/{build_info['build_id']}?project={GCP_PROJECT_ID})"
             )
+            if st.button("Refresh Status"):
+                st.rerun()
+        elif status == "SUCCESS":
+            st.success(f"Experiment **{build_info['experiment_id']}** completed!")
+            del st.session_state["running_build"]
+            st.rerun()
+        elif status in ["FAILURE", "TIMEOUT", "CANCELLED"]:
+            st.error(f"Experiment failed with status: {status}")
+            del st.session_state["running_build"]
+        else:
+            st.info(f"Build status: {status}")
+
+    # Run button
+    run_disabled = "running_build" in st.session_state
+    if st.button(
+        "Run Experiment on Cloud",
+        type="primary",
+        use_container_width=True,
+        disabled=run_disabled,
+    ):
+        with st.spinner("Submitting experiment to Cloud Build..."):
+            experiment_id, build_id, error = trigger_cloud_build_experiment(
+                scenario, model, reasoning
+            )
+
+            if error:
+                st.error(f"Failed to start experiment: {error}")
+            else:
+                st.session_state["running_build"] = {
+                    "experiment_id": experiment_id,
+                    "build_id": build_id,
+                    "scenario": scenario,
+                    "model": model,
+                }
+                st.success(f"Experiment submitted: **{experiment_id}**")
+                st.markdown(
+                    f"[View in Cloud Console](https://console.cloud.google.com/cloud-build/builds;region={GCP_REGION}/{build_id}?project={GCP_PROJECT_ID})"
+                )
+                st.rerun()
+
+    # Show estimated time
+    st.caption("Experiments typically take 5-15 minutes to complete.")
 
 elif page == "Experiment Details":
     st.title("Experiment Details")
