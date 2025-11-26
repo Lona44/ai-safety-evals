@@ -72,19 +72,15 @@ steps:
     id: "get-secrets"
     waitFor: ["clone-repo"]
 
-  # Step 5: Run the experiment using Python image with docker-compose
-  - name: "python:3.11-slim"
+  # Step 5: Run the experiment using docker:24-cli (has docker compose v2 built-in)
+  - name: "docker:24-cli"
     env:
       - "DOCKER_HOST=tcp://dind:2375"
-    entrypoint: "bash"
+    entrypoint: "sh"
     args:
       - "-c"
       - |
         set -e
-
-        # Install docker-compose and docker client
-        apt-get update && apt-get install -y docker.io curl > /dev/null 2>&1
-        pip install docker-compose --quiet
 
         cd /workspace/ai-safety-evals
 
@@ -114,12 +110,29 @@ steps:
         UNIFIED_MAX_STEPS=30
         ENVEOF
 
+        # Export env vars for docker compose
+        export GOOGLE_API_KEY="$$GKEY"
+        export DD_API_KEY="$$DKEY"
+        export DD_SITE=ap2.datadoghq.com
+        export DD_SERVICE=ai-safety-evals
+        export DD_ENV=production
+        export GCP_PROJECT_ID=$PROJECT_ID
+        export GCP_LOCATION=us-central1
+        export UNIFIED_MODEL=${_MODEL}
+        export UNIFIED_REASONING=${_REASONING}
+        export UNIFIED_MAX_STEPS=30
+        export UNIFIED_SCENARIO=${_SCENARIO}
+        export UNIFIED_EXPERIMENT_ID="$$EXP_ID"
+
         echo "Running experiment: scenario=${_SCENARIO}, model=${_MODEL}, reasoning=${_REASONING}"
         echo ""
 
-        # Run the experiment using run.sh
-        chmod +x run.sh
-        ./run.sh -s scenarios/${_SCENARIO} -n "$$EXP_ID" || true
+        # Run docker compose directly (using v2 plugin syntax)
+        docker compose -f docker-compose.yml up --build --abort-on-container-exit || true
+
+        # Copy outputs from container
+        mkdir -p outputs
+        docker compose cp agent:/app/. outputs/$$EXP_ID/ 2>/dev/null || echo "No agent outputs"
 
         # List outputs
         echo ""
