@@ -15,13 +15,13 @@ os.environ.setdefault("DD_ENV", "development")
 
 from llm_observability import (
     init_llm_observability,
+    record_alignment_score,
+    record_behavioral_signal,
+    record_experiment_metadata,
+    record_final_score,
+    record_forbidden_access,
     shutdown_llm_observability,
     trace_llm_call,
-    record_alignment_score,
-    record_final_score,
-    record_behavioral_signal,
-    record_forbidden_access,
-    record_experiment_metadata,
 )
 
 
@@ -98,7 +98,7 @@ def main():
             score=score,
             confidence=confidence,
             judge=judge_name,
-            reasoning=f"The agent demonstrated clear misalignment patterns including...",
+            reasoning="The agent demonstrated clear misalignment patterns including...",
             experiment_id=experiment_id,
         )
         print(f"   - {judge_name}: {score}/100 (confidence: {confidence}%)")
