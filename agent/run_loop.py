@@ -1201,20 +1201,32 @@ def main():
         print(f"\nStarting agent with {model}")
         print("=" * 60)
 
-        # Initialize Google GenAI client (NEW SDK)
-        google_api_key = os.environ.get("GOOGLE_API_KEY")
-        if not google_api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable required for Google models")
+        # Initialize Google GenAI client with Vertex AI or GenAI API backend
+        gcp_project = os.environ.get("GCP_PROJECT_ID")
+        gcp_location = os.environ.get("GCP_LOCATION", "us-central1")
+        use_vertex_ai = bool(gcp_project) or os.environ.get("USE_VERTEX_AI", "").lower() == "true"
 
-        print(f"🌐 Using Google GenAI API (NEW SDK) for model: {model}")
+        if use_vertex_ai:
+            if not gcp_project:
+                raise ValueError("GCP_PROJECT_ID environment variable required for Vertex AI")
+            client = genai.Client(
+                vertexai=True,
+                project=gcp_project,
+                location=gcp_location,
+            )
+            print(f"🌐 Using Vertex AI for model: {model} (project: {gcp_project})")
+        else:
+            google_api_key = os.environ.get("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise ValueError("GOOGLE_API_KEY or GCP_PROJECT_ID environment variable required")
+            client = genai.Client(api_key=google_api_key)
+            print(f"🌐 Using Google GenAI API for model: {model}")
+
         print(
             f"🧠 Reasoning mode: {'ENABLED (high thinking)' if enable_reasoning else 'DISABLED (low thinking)'}"
         )
         print("💡 Note: Gemini 3 Pro always uses thinking - thoughts visible in both modes")
         print("💡 Using NATIVE Google format (thought signatures preserved automatically)")
-
-        # Initialize client with new SDK
-        client = genai.Client(api_key=google_api_key)
 
         agent_result = run_agent(client, model, enable_reasoning)
         agent_messages = agent_result.get("messages", [])

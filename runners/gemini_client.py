@@ -1,8 +1,11 @@
 """
 Gemini client wrapper for AI safety evaluations.
 
-Uses Google GenAI SDK (google-genai) following patterns from ModelProof's
-google_reasoning implementation.
+Uses Google GenAI SDK (google-genai) with Vertex AI backend for enterprise
+deployment. The unified SDK allows seamless switching between GenAI API
+and Vertex AI by changing client initialization.
+
+See: https://cloud.google.com/vertex-ai/generative-ai/docs/sdks/overview
 """
 
 import os
@@ -16,11 +19,11 @@ class GeminiClient:
     """
     Client for interacting with Gemini models via Google GenAI SDK.
 
-    Supports all Gemini model variants and includes mock mode for development.
-    Based on proven patterns from ModelProof's google_reasoning implementation.
+    Supports both Vertex AI (default for production) and GenAI API backends.
+    The same generate_content calls work on both backends.
     """
 
-    # Supported Gemini models (verified working with Google GenAI API)
+    # Supported Gemini models (verified working with Vertex AI)
     SUPPORTED_MODELS = {
         "gemini-3-pro": "gemini-3-pro-preview",  # Flagship - supports thinking mode
         "gemini-2.5-pro": "gemini-2.5-pro",  # Latest 2.5 Pro
@@ -33,32 +36,63 @@ class GeminiClient:
         api_key: str | None = None,
         project_id: str | None = None,
         location: str = "us-central1",
+        use_vertex_ai: bool | None = None,
         use_mock: bool = False,
     ):
         """
         Initialize Gemini client.
 
         Args:
-            api_key: Google API key (defaults to GOOGLE_API_KEY env var)
-            project_id: GCP project ID (defaults to GCP_PROJECT_ID env var)
+            api_key: Google API key (for GenAI API mode only)
+            project_id: GCP project ID (for Vertex AI mode)
             location: GCP region (default: us-central1)
+            use_vertex_ai: If True, use Vertex AI backend. If False, use GenAI API.
+                          If None (default), auto-detect based on environment.
             use_mock: If True, use mock responses instead of real API calls
         """
-        self.project_id = project_id or os.getenv("GCP_PROJECT_ID", "ai-safety-evals-demo")
-        self.location = location
+        self.project_id = project_id or os.getenv("GCP_PROJECT_ID")
+        self.location = location or os.getenv("GCP_LOCATION", "us-central1")
         self.use_mock = use_mock
 
-        if not self.use_mock:
-            # Initialize real Google GenAI client
-            self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
-            if not self.api_key:
-                raise ValueError("GOOGLE_API_KEY environment variable required when use_mock=False")
+        # Auto-detect backend if not specified
+        if use_vertex_ai is None:
+            # Use Vertex AI if project ID is set, otherwise fall back to GenAI API
+            use_vertex_ai = (
+                bool(self.project_id) or os.getenv("USE_VERTEX_AI", "").lower() == "true"
+            )
 
-            self.client = genai.Client(api_key=self.api_key)
+        self.use_vertex_ai = use_vertex_ai
+
+        if not self.use_mock:
+            if self.use_vertex_ai:
+                # Initialize Vertex AI client (uses application default credentials)
+                if not self.project_id:
+                    raise ValueError(
+                        "GCP_PROJECT_ID environment variable required for Vertex AI mode"
+                    )
+                self.client = genai.Client(
+                    vertexai=True,
+                    project=self.project_id,
+                    location=self.location,
+                )
+                self.api_key = None
+                print(
+                    f"[Gemini] Using Vertex AI backend (project: {self.project_id}, location: {self.location})"
+                )
+            else:
+                # Initialize GenAI API client (uses API key)
+                self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
+                if not self.api_key:
+                    raise ValueError(
+                        "GOOGLE_API_KEY environment variable required for GenAI API mode"
+                    )
+                self.client = genai.Client(api_key=self.api_key)
+                print("[Gemini] Using GenAI API backend")
         else:
             # Mock mode - no client needed
             self.client = None
             self.api_key = "mock-api-key"
+            print("[Gemini] Using mock mode")
 
     def generate(
         self,

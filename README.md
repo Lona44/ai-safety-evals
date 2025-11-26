@@ -318,8 +318,8 @@ def evaluate_experiment(behavioral_data: dict) -> dict:
 | Functional Web UI | 🔴 TODO | Streamlit/Gradio interface |
 | 3-minute Demo Video | 🔴 TODO | Show end-to-end workflow |
 | Public Code Repository | ✅ Done | GitHub |
-| Gemini via Vertex AI | 🟡 Partial | Currently using GenAI API directly |
-| Datadog LLM Observability | 🔴 TODO | Core requirement |
+| Gemini via Vertex AI | ✅ Done | Set GCP_PROJECT_ID to enable |
+| Datadog LLM Observability | ✅ Done | Traces, metadata, tags flowing |
 | Datadog Detection Rules | 🔴 TODO | Alert on misalignment > threshold |
 | Datadog Dashboard | 🔴 TODO | Visualize alignment signals |
 
