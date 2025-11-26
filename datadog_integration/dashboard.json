@@ -1,0 +1,607 @@
+{
+  "title": "AI Safety Evals - Alignment Monitoring",
+  "description": "Real-time monitoring of AI model alignment signals and safety metrics from LLM Observability",
+  "widgets": [
+    {
+      "id": 1,
+      "definition": {
+        "title": "Alignment Score Distribution",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1",
+                "limit": {
+                  "count": 10,
+                  "order": "desc"
+                }
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "avg",
+                  "metric": "@alignment_final_score"
+                },
+                "group_by": [
+                  {
+                    "facet": "@experiment_id",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "avg",
+                      "order": "desc",
+                      "metric": "@alignment_final_score"
+                    }
+                  }
+                ],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 4,
+        "height": 4
+      }
+    },
+    {
+      "id": 2,
+      "definition": {
+        "title": "Misalignment Alerts (Score > 70)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @alignment_final_score:>70"
+                }
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {
+                "comparator": ">",
+                "value": 0,
+                "palette": "white_on_red"
+              },
+              {
+                "comparator": "<=",
+                "value": 0,
+                "palette": "white_on_green"
+              }
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {
+        "x": 4,
+        "y": 0,
+        "width": 2,
+        "height": 2
+      }
+    },
+    {
+      "id": 3,
+      "definition": {
+        "title": "Deception Attempts Detected",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @signal_type:deception @detected:true"
+                }
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {
+                "comparator": ">",
+                "value": 0,
+                "palette": "white_on_red"
+              },
+              {
+                "comparator": "<=",
+                "value": 0,
+                "palette": "white_on_green"
+              }
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {
+        "x": 6,
+        "y": 0,
+        "width": 2,
+        "height": 2
+      }
+    },
+    {
+      "id": 4,
+      "definition": {
+        "title": "Forbidden Access Attempts",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @forbidden_access:true"
+                }
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {
+                "comparator": ">",
+                "value": 0,
+                "palette": "white_on_yellow"
+              },
+              {
+                "comparator": "<=",
+                "value": 0,
+                "palette": "white_on_green"
+              }
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {
+        "x": 8,
+        "y": 0,
+        "width": 2,
+        "height": 2
+      }
+    },
+    {
+      "id": 5,
+      "definition": {
+        "title": "Total Experiments Run",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "cardinality",
+                  "metric": "@experiment_id"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {
+        "x": 10,
+        "y": 0,
+        "width": 2,
+        "height": 2
+      }
+    },
+    {
+      "id": 6,
+      "definition": {
+        "title": "Alignment Score Over Time",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "min", "max", "value"],
+        "type": "timeseries",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "alias": "Alignment Score",
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "avg",
+                  "metric": "@alignment_final_score"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "warm",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "line"
+          }
+        ],
+        "yaxis": {
+          "min": "0",
+          "max": "100"
+        },
+        "markers": [
+          {
+            "value": "y = 70",
+            "display_type": "error dashed",
+            "label": "High Risk Threshold"
+          },
+          {
+            "value": "y = 40",
+            "display_type": "warning dashed",
+            "label": "Moderate Risk Threshold"
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 4,
+        "width": 6,
+        "height": 3
+      }
+    },
+    {
+      "id": 7,
+      "definition": {
+        "title": "Judge Consensus Rate",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "timeseries",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "alias": "Consensus Achieved",
+                "formula": "query1"
+              },
+              {
+                "alias": "No Consensus",
+                "formula": "query2"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @judge_consensus:true"
+                }
+              },
+              {
+                "data_source": "spans",
+                "name": "query2",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [],
+                "search": {
+                  "query": "service:ai-safety-evals @judge_consensus:false"
+                }
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "dog_classic"
+            },
+            "display_type": "bars"
+          }
+        ]
+      },
+      "layout": {
+        "x": 6,
+        "y": 4,
+        "width": 6,
+        "height": 3
+      }
+    },
+    {
+      "id": 8,
+      "definition": {
+        "title": "Alignment by Model",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1",
+                "limit": {
+                  "count": 10,
+                  "order": "desc"
+                }
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "avg",
+                  "metric": "@alignment_final_score"
+                },
+                "group_by": [
+                  {
+                    "facet": "@model",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "avg",
+                      "order": "desc",
+                      "metric": "@alignment_final_score"
+                    }
+                  }
+                ],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 7,
+        "width": 4,
+        "height": 3
+      }
+    },
+    {
+      "id": 9,
+      "definition": {
+        "title": "Alignment by Scenario",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1",
+                "limit": {
+                  "count": 10,
+                  "order": "desc"
+                }
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "avg",
+                  "metric": "@alignment_final_score"
+                },
+                "group_by": [
+                  {
+                    "facet": "@scenario",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "avg",
+                      "order": "desc",
+                      "metric": "@alignment_final_score"
+                    }
+                  }
+                ],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {
+        "x": 4,
+        "y": 7,
+        "width": 4,
+        "height": 3
+      }
+    },
+    {
+      "id": 10,
+      "definition": {
+        "title": "Result Status Distribution",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "sunburst",
+        "requests": [
+          {
+            "formulas": [
+              {
+                "formula": "query1"
+              }
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@result_status",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ],
+                "search": {
+                  "query": "service:ai-safety-evals @span.type:llm"
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {
+        "x": 8,
+        "y": 7,
+        "width": 4,
+        "height": 3
+      }
+    },
+    {
+      "id": 11,
+      "definition": {
+        "title": "Recent LLM Traces",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "list_stream",
+        "requests": [
+          {
+            "columns": [
+              {
+                "width": "auto",
+                "field": "timestamp"
+              },
+              {
+                "width": "auto",
+                "field": "@experiment_id"
+              },
+              {
+                "width": "auto",
+                "field": "@model"
+              },
+              {
+                "width": "auto",
+                "field": "@alignment_final_score"
+              },
+              {
+                "width": "auto",
+                "field": "@result_status"
+              }
+            ],
+            "query": {
+              "data_source": "spans_stream",
+              "query_string": "service:ai-safety-evals @span.type:llm",
+              "indexes": ["*"]
+            },
+            "response_format": "event_list"
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 10,
+        "width": 12,
+        "height": 4
+      }
+    }
+  ],
+  "template_variables": [
+    {
+      "name": "model",
+      "prefix": "@model",
+      "available_values": [],
+      "default": "*"
+    },
+    {
+      "name": "scenario",
+      "prefix": "@scenario",
+      "available_values": [],
+      "default": "*"
+    }
+  ],
+  "layout_type": "ordered",
+  "notify_list": [],
+  "reflow_type": "fixed"
+}

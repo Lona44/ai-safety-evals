@@ -52,11 +52,13 @@ logs/
 outputs/
 
 # GCP credentials
-*.json
-!package.json
-!tsconfig.json
 *credentials*.json
 *service-account*.json
+
+# JSON files - allow specific ones
+!package.json
+!tsconfig.json
+!datadog_integration/*.json
 
 # Datadog
 dd-trace/
