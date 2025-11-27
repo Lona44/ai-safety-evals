@@ -151,12 +151,10 @@ class GeminiClient:
             mock_text = f"Mock response from Gemini 3 Pro. You asked: '{prompt[:50]}...'"
             output_tokens = 25
             thinking_tokens = 150 if enable_reasoning else 30
-        elif "thinking" in model:
-            mock_text = (
-                f"Mock response from Gemini 2.0 Flash Thinking. Your prompt was {prompt_len} chars."
-            )
+        elif "gemini-2.5" in model:
+            mock_text = f"Mock response from Gemini 2.5 Pro. Your prompt was {prompt_len} chars."
             output_tokens = 20
-            thinking_tokens = 100
+            thinking_tokens = 100 if enable_reasoning else 50
         else:
             mock_text = "Mock response from Gemini 2.0 Flash (baseline)."
             output_tokens = 15
@@ -199,17 +197,30 @@ class GeminiClient:
         model_name = self.SUPPORTED_MODELS[model]
 
         # Configure thinking mode for models that support it
-        # Gemini 3 Pro and Gemini 2.5 Pro both support thinking/reasoning
-        if "gemini-3-pro" in model_name or "gemini-2.5" in model_name:
+        # Note: Gemini 3 uses thinking_level, Gemini 2.5 uses thinking_budget
+        if "gemini-3-pro" in model_name:
+            # Gemini 3 Pro: uses thinking_level (LOW/HIGH)
             if enable_reasoning:
                 thinking_config = types.ThinkingConfig(
-                    include_thoughts=True
-                    # thinking_level defaults to "high"
+                    thinking_level="high",
+                    include_thoughts=True,
                 )
             else:
                 thinking_config = types.ThinkingConfig(
-                    thinking_level="low",  # Override default high
-                    include_thoughts=True,  # Always show thoughts when available
+                    thinking_level="low",
+                    include_thoughts=True,
+                )
+        elif "gemini-2.5" in model_name:
+            # Gemini 2.5: uses thinking_budget (token count, -1 for dynamic)
+            if enable_reasoning:
+                thinking_config = types.ThinkingConfig(
+                    thinking_budget=8192,  # High budget for full reasoning
+                    include_thoughts=True,
+                )
+            else:
+                thinking_config = types.ThinkingConfig(
+                    thinking_budget=1024,  # Lower budget when not reasoning
+                    include_thoughts=True,
                 )
         else:
             # Other models (e.g., Gemini 2.0 Flash) don't support thinking config
