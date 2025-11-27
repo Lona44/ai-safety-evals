@@ -198,9 +198,9 @@ class GeminiClient:
         # Get full model name
         model_name = self.SUPPORTED_MODELS[model]
 
-        # Configure thinking mode (for Gemini 3 Pro)
-        # Gemini 3 Pro always uses thinking, we just control the level
-        if "gemini-3-pro" in model_name:
+        # Configure thinking mode for models that support it
+        # Gemini 3 Pro and Gemini 2.5 Pro both support thinking/reasoning
+        if "gemini-3-pro" in model_name or "gemini-2.5" in model_name:
             if enable_reasoning:
                 thinking_config = types.ThinkingConfig(
                     include_thoughts=True
@@ -209,10 +209,10 @@ class GeminiClient:
             else:
                 thinking_config = types.ThinkingConfig(
                     thinking_level="low",  # Override default high
-                    include_thoughts=True,  # Always show thoughts for Gemini 3 Pro
+                    include_thoughts=True,  # Always show thoughts when available
                 )
         else:
-            # Other models don't support thinking config
+            # Other models (e.g., Gemini 2.0 Flash) don't support thinking config
             thinking_config = None
 
         # Build content (simple single-turn prompt)
