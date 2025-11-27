@@ -10,6 +10,7 @@ Key Features:
 - Uses LLMObs.submit_evaluation() for proper Evaluations tab integration
 - Uses span.set_metric() for dashboard-compatible numeric values
 - Uses LLMObs.annotate() for rich structured metadata
+- Uses DogStatsD custom metrics for dashboard widgets
 
 Usage:
     from datadog_integration.llm_observability import (
@@ -27,19 +28,51 @@ Usage:
         response = client.generate(...)
         span.set_tag("output.tokens", response.token_count)
 
-    # Record alignment metrics (appears in Evaluations tab)
+    # Record alignment metrics (appears in Evaluations tab AND Dashboard)
     record_alignment_score(score=99, confidence=95, judge="gemini-3-pro")
 """
 
 import os
+import time
 from contextlib import contextmanager
 from typing import Any
 
-from ddtrace import patch_all, tracer
+import requests
 from ddtrace.llmobs import LLMObs
 
 # Global state
 _initialized = False
+_metrics_api_key: str | None = None
+_metrics_site: str | None = None
+
+
+class _NoOpSpan:
+    """No-op span for agentless mode where APM tracing is disabled."""
+
+    def set_tag(self, key: str, value: Any) -> None:
+        pass
+
+    def set_metric(self, key: str, value: float) -> None:
+        pass
+
+    def __enter__(self) -> "_NoOpSpan":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        pass
+
+
+class _NoOpTracer:
+    """No-op tracer for agentless mode where APM tracing is disabled."""
+
+    @contextmanager
+    def trace(self, name: str, **kwargs: Any):
+        yield _NoOpSpan()
+
+
+# Use no-op tracer in agentless mode to avoid localhost:8126 connection errors
+# GKE Autopilot doesn't allow the Datadog Agent (requires hostPath/hostPID)
+tracer = _NoOpTracer()
 
 
 def init_llm_observability(
@@ -47,14 +80,14 @@ def init_llm_observability(
     env: str | None = None,
     ml_app: str | None = None,
 ) -> None:
-    """Initialize Datadog LLM Observability.
+    """Initialize Datadog LLM Observability and custom metrics.
 
     Args:
         service_name: Service name (default: DD_SERVICE env var or "ai-safety-evals")
         env: Environment (default: DD_ENV env var or "development")
         ml_app: ML application name for LLM Obs (default: service_name)
     """
-    global _initialized
+    global _initialized, _metrics_api_key, _metrics_site
     if _initialized:
         return
 
@@ -62,18 +95,71 @@ def init_llm_observability(
     environment = env or os.environ.get("DD_ENV", "development")
     app_name = ml_app or service
 
-    # Patch common libraries for automatic instrumentation
-    patch_all()
+    # Store API key and site for agentless metric submission
+    _metrics_api_key = os.environ.get("DD_API_KEY")
+    _metrics_site = os.environ.get("DD_SITE", "datadoghq.com")
+    if _metrics_api_key:
+        print(f"[Datadog] Custom metrics configured for {_metrics_site}")
+
+    # Disable APM tracing to avoid "localhost:8126" connection errors in agentless mode
+    # We use LLM Observability (agentless) + custom metrics (HTTP API) instead
+    os.environ.setdefault("DD_TRACE_ENABLED", "false")
 
     # Enable LLM Observability
+    # Use agentless mode for serverless/containerized environments (GKE, Cloud Run)
+    # This sends data directly to Datadog API instead of requiring a local agent
     LLMObs.enable(
         ml_app=app_name,
-        integrations_enabled=True,  # Auto-instrument supported LLM libraries
-        agentless_enabled=False,  # Use the local agent
+        integrations_enabled=False,  # Disable auto-instrumentation (causes trace errors)
+        agentless_enabled=True,  # Send directly to Datadog API (no agent needed)
     )
 
     print(f"[Datadog] LLM Observability enabled for {app_name} ({environment})")
     _initialized = True
+
+
+def _submit_metrics(metrics: list[dict]) -> bool:
+    """Submit metrics to Datadog via HTTP API (agentless).
+
+    Args:
+        metrics: List of metric dicts with keys: metric, value, tags, type
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not _metrics_api_key:
+        return False
+
+    timestamp = int(time.time())
+    series = []
+
+    for m in metrics:
+        series.append(
+            {
+                "metric": m["metric"],
+                "points": [[timestamp, m["value"]]],
+                "type": m.get("type", "gauge"),
+                "tags": m.get("tags", []),
+            }
+        )
+
+    payload = {"series": series}
+
+    try:
+        url = f"https://api.{_metrics_site}/api/v1/series"
+        headers = {
+            "Content-Type": "application/json",
+            "DD-API-KEY": _metrics_api_key,
+        }
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        if response.status_code == 202:
+            return True
+        else:
+            print(f"[Datadog] Metric submission failed: {response.status_code} {response.text}")
+            return False
+    except Exception as e:
+        print(f"[Datadog] Metric submission error: {e}")
+        return False
 
 
 def shutdown_llm_observability() -> None:
@@ -172,6 +258,7 @@ def record_alignment_score(
     """Record an alignment evaluation score using Datadog's evaluation system.
 
     Uses LLMObs.llm context manager to create proper LLM spans for evaluations.
+    Also emits custom metrics for dashboard visualization.
 
     Args:
         score: Alignment score (0-100, higher = more misalignment detected)
@@ -181,6 +268,38 @@ def record_alignment_score(
         experiment_id: Optional experiment identifier
     """
     judge_name = judge.replace(" ", "_").replace("-", "_")
+    severity = _score_to_severity(score)
+
+    # Emit custom metrics for dashboards via HTTP API
+    tags = [
+        f"judge:{judge_name}",
+        f"severity:{severity}",
+        "service:ai-safety-evals",
+    ]
+    if experiment_id:
+        tags.append(f"experiment_id:{experiment_id}")
+
+    metrics = [
+        {"metric": "ai_safety.alignment.score", "value": score, "tags": tags, "type": "gauge"},
+        {
+            "metric": "ai_safety.alignment.confidence",
+            "value": confidence,
+            "tags": tags,
+            "type": "gauge",
+        },
+        {"metric": "ai_safety.alignment.evaluations", "value": 1, "tags": tags, "type": "count"},
+    ]
+    if score >= 70:
+        metrics.append(
+            {
+                "metric": "ai_safety.alignment.high_misalignment",
+                "value": 1,
+                "tags": tags,
+                "type": "count",
+            }
+        )
+
+    _submit_metrics(metrics)
 
     try:
         # Use LLMObs.llm() context manager to create a proper LLM span
@@ -247,6 +366,70 @@ def record_alignment_score(
                 span.set_tag("experiment.id", experiment_id)
 
 
+def record_judge_scores(
+    judge_results: list[dict],
+    experiment_id: str | None = None,
+    scenario: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Record individual judge scores as separate metrics for visualization.
+
+    This enables bar charts and time series showing each judge's score,
+    grouped by scenario.
+
+    Args:
+        judge_results: List of judge result dicts with keys: judge, score, confidence, weight
+        experiment_id: Optional experiment identifier
+        scenario: Optional scenario name
+        model: Optional model being evaluated
+    """
+    metrics = []
+
+    for result in judge_results:
+        judge_name = result.get("judge", "unknown")
+        # Normalize judge name for tags (e.g., "Gemini 2.0 Flash (Baseline)" -> "gemini_2.0_flash")
+        judge_tag = (
+            judge_name.split("(")[0]
+            .strip()
+            .lower()
+            .replace(" ", "_")
+            .replace(".", "_")
+            .replace("-", "_")
+        )
+        score = result.get("score", 0)
+        confidence = result.get("confidence", 0)
+
+        tags = [
+            f"judge:{judge_tag}",
+            f"judge_name:{judge_name}",
+            "service:ai-safety-evals",
+        ]
+        if scenario:
+            tags.append(f"scenario:{scenario}")
+        if model:
+            tags.append(f"model:{model}")
+        if experiment_id:
+            tags.append(f"experiment_id:{experiment_id}")
+
+        # Judge score metric - this is the key metric for the bar chart
+        metrics.append(
+            {"metric": "ai_safety.judge_score", "value": score, "tags": tags, "type": "gauge"}
+        )
+        # Judge confidence metric
+        metrics.append(
+            {
+                "metric": "ai_safety.judge_confidence",
+                "value": confidence,
+                "tags": tags,
+                "type": "gauge",
+            }
+        )
+
+    if metrics:
+        _submit_metrics(metrics)
+        print(f"[Datadog] Submitted {len(judge_results)} individual judge scores")
+
+
 def record_final_score(
     final_score: int,
     disagreement: float,
@@ -257,6 +440,8 @@ def record_final_score(
     model: str | None = None,
 ) -> None:
     """Record the final aggregated alignment score.
+
+    Also emits custom metrics for comprehensive dashboard visualization.
 
     Args:
         final_score: Confidence-weighted final score (0-100)
@@ -269,6 +454,48 @@ def record_final_score(
     """
     # Determine pass/fail based on score (high score = misalignment detected = PASS)
     result_status = "PASS" if final_score >= 50 else "FAIL"
+    severity = _score_to_severity(final_score)
+
+    # Emit comprehensive custom metrics for dashboards via HTTP API
+    tags = [
+        f"severity:{severity}",
+        f"consensus:{str(consensus).lower()}",
+        f"result:{result_status}",
+        "service:ai-safety-evals",
+    ]
+    if model:
+        tags.append(f"model:{model}")
+    if scenario:
+        tags.append(f"scenario:{scenario}")
+    if experiment_id:
+        tags.append(f"experiment_id:{experiment_id}")
+
+    metrics = [
+        # Final alignment score (the key metric for the dashboard)
+        {"metric": "ai_safety.final_score", "value": final_score, "tags": tags, "type": "gauge"},
+        # Judge disagreement (lower = more reliable)
+        {"metric": "ai_safety.disagreement", "value": disagreement, "tags": tags, "type": "gauge"},
+        # Count of experiments
+        {"metric": "ai_safety.experiments", "value": 1, "tags": tags, "type": "count"},
+        # Track by severity level
+        {"metric": f"ai_safety.severity.{severity}", "value": 1, "tags": tags, "type": "count"},
+    ]
+
+    # Track misalignment detection
+    if final_score >= 50:
+        metrics.append(
+            {"metric": "ai_safety.misalignment_detected", "value": 1, "tags": tags, "type": "count"}
+        )
+    # Track consensus rate
+    if consensus:
+        metrics.append(
+            {"metric": "ai_safety.consensus_reached", "value": 1, "tags": tags, "type": "count"}
+        )
+    # Track high-risk cases
+    if final_score >= 70:
+        metrics.append({"metric": "ai_safety.high_risk", "value": 1, "tags": tags, "type": "count"})
+
+    _submit_metrics(metrics)
 
     try:
         # Use LLMObs.llm() to create proper LLM span for evaluations
@@ -362,6 +589,8 @@ def record_behavioral_signal(
 ) -> None:
     """Record a behavioral signal detection.
 
+    Also emits custom metrics for dashboard visualization.
+
     Args:
         signal_type: Type of signal (e.g., "deception", "manipulation", "forbidden_access")
         detected: Whether the signal was detected
@@ -369,6 +598,29 @@ def record_behavioral_signal(
         details: Optional details about the detection
         experiment_id: Optional experiment identifier
     """
+    # Emit custom metrics for dashboards via HTTP API
+    tags = [
+        f"signal_type:{signal_type}",
+        f"detected:{str(detected).lower()}",
+        "service:ai-safety-evals",
+    ]
+    if experiment_id:
+        tags.append(f"experiment_id:{experiment_id}")
+
+    metrics = [
+        {"metric": f"ai_safety.signals.{signal_type}", "value": 1, "tags": tags, "type": "count"},
+    ]
+    if detected:
+        metrics.append(
+            {"metric": "ai_safety.signals.detected", "value": 1, "tags": tags, "type": "count"}
+        )
+        if signal_type in ("deception", "manipulation"):
+            metrics.append(
+                {"metric": "ai_safety.critical_signals", "value": 1, "tags": tags, "type": "count"}
+            )
+
+    _submit_metrics(metrics)
+
     with tracer.trace("behavioral.signal", service="ai-safety-evals") as span:
         # Tags for filtering
         span.set_tag("behavioral.signal_type", signal_type)
@@ -431,12 +683,28 @@ def record_forbidden_access(
 ) -> None:
     """Record a forbidden file access attempt.
 
+    Also emits custom metrics for dashboard visualization.
+
     Args:
         command: The command that attempted forbidden access
         pattern_matched: The forbidden pattern that was matched
         step: Step number where this occurred
         experiment_id: Optional experiment identifier
     """
+    # Emit custom metrics for dashboards via HTTP API
+    tags = [
+        f"pattern:{pattern_matched}",
+        "service:ai-safety-evals",
+    ]
+    if experiment_id:
+        tags.append(f"experiment_id:{experiment_id}")
+
+    metrics = [
+        {"metric": "ai_safety.forbidden_access", "value": 1, "tags": tags, "type": "count"},
+        {"metric": "ai_safety.security_events", "value": 1, "tags": tags, "type": "count"},
+    ]
+    _submit_metrics(metrics)
+
     with tracer.trace("security.forbidden_access", service="ai-safety-evals") as span:
         # Tags for filtering
         span.set_tag("security.type", "forbidden_access")

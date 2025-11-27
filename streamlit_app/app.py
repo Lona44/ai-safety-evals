@@ -7,9 +7,9 @@ with Datadog LLM Observability integration.
 Deployed to Cloud Run, authenticates to Vertex AI via service account.
 """
 
+import hashlib
 import json
 import os
-import hashlib
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -19,11 +19,22 @@ import streamlit as st
 # Optional GCP imports - gracefully degrade if not available
 try:
     from google.cloud import storage
-    from google.cloud.devtools import cloudbuild_v1
 
-    GCP_AVAILABLE = True
+    GCS_AVAILABLE = True
 except ImportError:
-    GCP_AVAILABLE = False
+    GCS_AVAILABLE = False
+
+# Optional Kubernetes imports - for GKE experiment triggering
+try:
+    from kubernetes import client as k8s_client
+    from kubernetes import config as k8s_config
+
+    K8S_AVAILABLE = True
+except ImportError:
+    K8S_AVAILABLE = False
+
+# Combined availability flag
+GCP_AVAILABLE = GCS_AVAILABLE
 
 # Page configuration
 st.set_page_config(
@@ -38,6 +49,13 @@ GCS_BUCKET = os.getenv("GCS_BUCKET", "ai-safety-evals-artifacts")
 GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "modelproof-platform")
 GCP_REGION = os.getenv("GCP_REGION", "us-central1")
 LOCAL_OUTPUTS_DIR = Path("outputs")
+
+# Kubernetes/GKE configuration
+K8S_NAMESPACE = os.getenv("K8S_NAMESPACE", "ai-safety-evals")
+GKE_CLUSTER = os.getenv("GKE_CLUSTER", "ai-safety-evals")
+ARTIFACT_REGISTRY = os.getenv(
+    "ARTIFACT_REGISTRY", f"{GCP_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/ai-safety-evals"
+)
 
 # Available models and scenarios
 MODELS = {
@@ -89,100 +107,159 @@ def get_local_experiments():
     return experiments
 
 
-def trigger_cloud_build_experiment(
+def get_k8s_client():
+    """Get Kubernetes client, configured for in-cluster or local use."""
+    if not K8S_AVAILABLE:
+        return None
+
+    try:
+        # Try in-cluster config first (when running in GKE/Cloud Run)
+        k8s_config.load_incluster_config()
+    except k8s_config.ConfigException:
+        try:
+            # Fall back to local kubeconfig
+            k8s_config.load_kube_config()
+        except k8s_config.ConfigException:
+            return None
+
+    return k8s_client.BatchV1Api()
+
+
+def trigger_gke_experiment(
     scenario: str,
     model: str,
     reasoning: bool,
 ) -> tuple[str | None, str | None, str | None]:
     """
-    Trigger an experiment via Cloud Build using Python client.
+    Trigger an experiment via GKE Kubernetes Job.
 
-    Returns: (experiment_id, build_id, error_message)
+    Returns: (experiment_id, job_name, error_message)
     """
-    if not GCP_AVAILABLE:
-        return None, None, "GCP client libraries not available. Run experiments via CLI."
+    if not K8S_AVAILABLE:
+        return None, None, "Kubernetes client not available. Install 'kubernetes' package."
+
+    batch_api = get_k8s_client()
+    if not batch_api:
+        return None, None, "Could not configure Kubernetes client. Check cluster credentials."
 
     # Generate unique experiment ID
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_hash = hashlib.sha256(f"{timestamp}{scenario}{model}".encode()).hexdigest()[:8]
     experiment_id = f"{scenario}_{timestamp}_{unique_hash}"
+    job_name = f"experiment-{experiment_id}".lower().replace("_", "-")[:63]  # K8s name limits
 
     try:
-        client = cloudbuild_v1.CloudBuildClient()
-
-        # Define build steps inline (mirrors cloudbuild-experiment.yaml)
-        build = cloudbuild_v1.Build(
-            substitutions={
-                "_SCENARIO": scenario,
-                "_MODEL": model,
-                "_REASONING": "true" if reasoning else "false",
-                "_EXPERIMENT_ID": experiment_id,
-                "_GCS_BUCKET": GCS_BUCKET,
-            },
-            steps=[
-                # Step 1: Clone repo
-                cloudbuild_v1.BuildStep(
-                    name="gcr.io/cloud-builders/git",
-                    args=["clone", "https://github.com/Lona44/ai-safety-evals.git", "/workspace/repo"],
-                    id="clone",
+        # Define the Job spec
+        job = k8s_client.V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=k8s_client.V1ObjectMeta(
+                name=job_name,
+                namespace=K8S_NAMESPACE,
+                labels={
+                    "app": "ai-safety-evals",
+                    "component": "experiment",
+                    "scenario": scenario,
+                },
+            ),
+            spec=k8s_client.V1JobSpec(
+                ttl_seconds_after_finished=3600,
+                backoff_limit=0,
+                template=k8s_client.V1PodTemplateSpec(
+                    metadata=k8s_client.V1ObjectMeta(
+                        labels={"app": "ai-safety-evals", "component": "experiment"}
+                    ),
+                    spec=k8s_client.V1PodSpec(
+                        service_account_name="experiment-runner",
+                        restart_policy="Never",
+                        containers=[
+                            # Submission Server container
+                            k8s_client.V1Container(
+                                name="submission-server",
+                                image=f"{ARTIFACT_REGISTRY}/submission:latest",
+                                ports=[k8s_client.V1ContainerPort(container_port=8000)],
+                                env=[
+                                    k8s_client.V1EnvVar(name="SCENARIO", value=scenario),
+                                ],
+                                resources=k8s_client.V1ResourceRequirements(
+                                    requests={"cpu": "250m", "memory": "256Mi"},
+                                    limits={"cpu": "500m", "memory": "512Mi"},
+                                ),
+                            ),
+                            # Agent container
+                            k8s_client.V1Container(
+                                name="agent",
+                                image=f"{ARTIFACT_REGISTRY}/agent:latest",
+                                env=[
+                                    k8s_client.V1EnvVar(
+                                        name="UNIFIED_EXPERIMENT_ID", value=experiment_id
+                                    ),
+                                    k8s_client.V1EnvVar(name="UNIFIED_SCENARIO", value=scenario),
+                                    k8s_client.V1EnvVar(name="UNIFIED_MODEL", value=model),
+                                    k8s_client.V1EnvVar(
+                                        name="UNIFIED_REASONING",
+                                        value="true" if reasoning else "false",
+                                    ),
+                                    k8s_client.V1EnvVar(name="UNIFIED_MAX_STEPS", value="30"),
+                                    k8s_client.V1EnvVar(
+                                        name="GCP_PROJECT_ID", value=GCP_PROJECT_ID
+                                    ),
+                                    k8s_client.V1EnvVar(name="GCP_LOCATION", value=GCP_REGION),
+                                    k8s_client.V1EnvVar(
+                                        name="SUBMISSION_URL", value="http://localhost:8000"
+                                    ),
+                                    k8s_client.V1EnvVar(name="GCS_BUCKET", value=GCS_BUCKET),
+                                    k8s_client.V1EnvVar(name="DD_SERVICE", value="ai-safety-evals"),
+                                    k8s_client.V1EnvVar(name="DD_ENV", value="production"),
+                                ],
+                                resources=k8s_client.V1ResourceRequirements(
+                                    requests={"cpu": "500m", "memory": "512Mi"},
+                                    limits={"cpu": "1000m", "memory": "1Gi"},
+                                ),
+                            ),
+                        ],
+                    ),
                 ),
-                # Step 2: Run experiment with Docker Compose
-                cloudbuild_v1.BuildStep(
-                    name="docker/compose:1.29.2",
-                    args=[
-                        "-f", "/workspace/repo/docker-compose.yml",
-                        "run", "--rm",
-                        "-e", f"UNIFIED_SCENARIO={scenario}",
-                        "-e", f"UNIFIED_MODEL={model}",
-                        "-e", f"UNIFIED_REASONING={'true' if reasoning else 'false'}",
-                        "-e", f"UNIFIED_EXPERIMENT_ID={experiment_id}",
-                        "agent",
-                    ],
-                    id="run-experiment",
-                    wait_for=["clone"],
-                ),
-                # Step 3: Upload results to GCS
-                cloudbuild_v1.BuildStep(
-                    name="gcr.io/cloud-builders/gsutil",
-                    args=[
-                        "-m", "cp", "-r",
-                        f"/workspace/repo/outputs/{experiment_id}",
-                        f"gs://{GCS_BUCKET}/experiments/",
-                    ],
-                    id="upload",
-                    wait_for=["run-experiment"],
-                ),
-            ],
-            timeout={"seconds": 1800},  # 30 minutes
-            options=cloudbuild_v1.BuildOptions(
-                machine_type=cloudbuild_v1.BuildOptions.MachineType.E2_HIGHCPU_8,
             ),
         )
 
-        # Submit the build (use global location for simpler setup)
-        operation = client.create_build(
-            request={"project_id": GCP_PROJECT_ID, "build": build}
-        )
-        build_id = operation.metadata.build.id
-
-        return experiment_id, build_id, None
+        # Create the Job
+        batch_api.create_namespaced_job(namespace=K8S_NAMESPACE, body=job)
+        return experiment_id, job_name, None
 
     except Exception as e:
-        return None, None, f"Error: {str(e)}"
+        return None, None, f"Error creating K8s Job: {str(e)}"
 
 
-def get_build_status(build_id: str) -> dict:
-    """Get the status of a Cloud Build using Python client."""
-    if not GCP_AVAILABLE:
+def get_job_status(job_name: str) -> dict:
+    """Get the status of a Kubernetes Job."""
+    if not K8S_AVAILABLE:
+        return {}
+
+    batch_api = get_k8s_client()
+    if not batch_api:
         return {}
 
     try:
-        client = cloudbuild_v1.CloudBuildClient()
-        build = client.get_build(project_id=GCP_PROJECT_ID, id=build_id)
+        job = batch_api.read_namespaced_job(name=job_name, namespace=K8S_NAMESPACE)
+
+        # Determine status
+        if job.status.succeeded:
+            status = "SUCCESS"
+        elif job.status.failed:
+            status = "FAILURE"
+        elif job.status.active:
+            status = "WORKING"
+        else:
+            status = "PENDING"
+
         return {
-            "status": build.status.name,
-            "id": build.id,
-            "create_time": str(build.create_time),
+            "status": status,
+            "name": job.metadata.name,
+            "create_time": str(job.metadata.creation_timestamp),
+            "succeeded": job.status.succeeded,
+            "failed": job.status.failed,
+            "active": job.status.active,
         }
     except Exception:
         pass
@@ -207,11 +284,13 @@ def get_gcs_experiments() -> list[dict]:
         for prefix in blobs.prefixes:
             exp_id = prefix.rstrip("/").split("/")[-1]
             if exp_id and not exp_id.startswith("."):
-                experiments.append({
-                    "id": exp_id,
-                    "path": f"gs://{GCS_BUCKET}/{prefix}",
-                    "source": "gcs",
-                })
+                experiments.append(
+                    {
+                        "id": exp_id,
+                        "path": f"gs://{GCS_BUCKET}/{prefix}",
+                        "source": "gcs",
+                    }
+                )
     except Exception:
         pass
 
@@ -423,9 +502,7 @@ if page == "Dashboard":
         for exp in experiments[:10]:
             source_badge = " (Cloud)" if exp.get("source") == "gcs" else " (Local)"
             timestamp_str = (
-                exp["timestamp"].strftime("%Y-%m-%d %H:%M")
-                if "timestamp" in exp
-                else ""
+                exp["timestamp"].strftime("%Y-%m-%d %H:%M") if "timestamp" in exp else ""
             )
             with st.expander(f"**{exp['id']}**{source_badge} {timestamp_str}"):
                 result = exp.get("result") or {}
@@ -493,59 +570,64 @@ elif page == "Run Experiment":
 
     st.markdown("---")
 
-    # Check for running builds in session state
-    if "running_build" in st.session_state:
-        build_info = st.session_state["running_build"]
-        build_status = get_build_status(build_info["build_id"])
-        status = build_status.get("status", "UNKNOWN")
+    # Check for running jobs in session state
+    if "running_job" in st.session_state:
+        job_info = st.session_state["running_job"]
+        job_status = get_job_status(job_info["job_name"])
+        status = job_status.get("status", "UNKNOWN")
 
         if status == "WORKING":
-            st.warning(f"Experiment **{build_info['experiment_id']}** is running...")
+            st.warning(f"Experiment **{job_info['experiment_id']}** is running...")
             st.markdown(
-                f"[View in Cloud Console](https://console.cloud.google.com/cloud-build/builds;region={GCP_REGION}/{build_info['build_id']}?project={GCP_PROJECT_ID})"
+                f"[View in GKE Console](https://console.cloud.google.com/kubernetes/job/{GCP_REGION}/{GKE_CLUSTER}/{K8S_NAMESPACE}/{job_info['job_name']}?project={GCP_PROJECT_ID})"
             )
             if st.button("Refresh Status"):
                 st.rerun()
         elif status == "SUCCESS":
-            st.success(f"Experiment **{build_info['experiment_id']}** completed!")
-            del st.session_state["running_build"]
+            st.success(f"Experiment **{job_info['experiment_id']}** completed!")
+            del st.session_state["running_job"]
             st.rerun()
-        elif status in ["FAILURE", "TIMEOUT", "CANCELLED"]:
-            st.error(f"Experiment failed with status: {status}")
-            del st.session_state["running_build"]
+        elif status == "FAILURE":
+            st.error("Experiment failed. Check logs for details.")
+            st.markdown(
+                f"[View Logs](https://console.cloud.google.com/kubernetes/job/{GCP_REGION}/{GKE_CLUSTER}/{K8S_NAMESPACE}/{job_info['job_name']}/logs?project={GCP_PROJECT_ID})"
+            )
+            del st.session_state["running_job"]
+        elif status == "PENDING":
+            st.info("Experiment is pending (waiting for resources)...")
+            if st.button("Refresh Status"):
+                st.rerun()
         else:
-            st.info(f"Build status: {status}")
+            st.info(f"Job status: {status}")
 
     # Run button
-    run_disabled = "running_build" in st.session_state
+    run_disabled = "running_job" in st.session_state
     if st.button(
-        "Run Experiment on Cloud",
+        "Run Experiment on GKE",
         type="primary",
         use_container_width=True,
         disabled=run_disabled,
     ):
-        with st.spinner("Submitting experiment to Cloud Build..."):
-            experiment_id, build_id, error = trigger_cloud_build_experiment(
-                scenario, model, reasoning
-            )
+        with st.spinner("Submitting experiment to GKE..."):
+            experiment_id, job_name, error = trigger_gke_experiment(scenario, model, reasoning)
 
             if error:
                 st.error(f"Failed to start experiment: {error}")
             else:
-                st.session_state["running_build"] = {
+                st.session_state["running_job"] = {
                     "experiment_id": experiment_id,
-                    "build_id": build_id,
+                    "job_name": job_name,
                     "scenario": scenario,
                     "model": model,
                 }
                 st.success(f"Experiment submitted: **{experiment_id}**")
                 st.markdown(
-                    f"[View in Cloud Console](https://console.cloud.google.com/cloud-build/builds;region={GCP_REGION}/{build_id}?project={GCP_PROJECT_ID})"
+                    f"[View in GKE Console](https://console.cloud.google.com/kubernetes/job/{GCP_REGION}/{GKE_CLUSTER}/{K8S_NAMESPACE}/{job_name}?project={GCP_PROJECT_ID})"
                 )
                 st.rerun()
 
     # Show estimated time
-    st.caption("Experiments typically take 5-15 minutes to complete.")
+    st.caption("Experiments typically take 5-10 minutes to complete on GKE.")
 
 elif page == "Experiment Details":
     st.title("Experiment Details")
@@ -688,6 +770,15 @@ elif page == "Settings":
     st.header("GCP Configuration")
     st.text_input("GCP Project ID", value=GCP_PROJECT_ID, disabled=True)
     st.text_input("GCS Bucket", value=GCS_BUCKET, disabled=True)
+    st.text_input("GCP Region", value=GCP_REGION, disabled=True)
+
+    st.header("GKE Configuration")
+    st.text_input("GKE Cluster", value=GKE_CLUSTER, disabled=True)
+    st.text_input("K8s Namespace", value=K8S_NAMESPACE, disabled=True)
+    st.text_input("Artifact Registry", value=ARTIFACT_REGISTRY, disabled=True)
+    st.text_input(
+        "Kubernetes Client", value="Available" if K8S_AVAILABLE else "Not installed", disabled=True
+    )
 
     st.header("Datadog Integration")
     dd_api_key = os.getenv("DD_API_KEY", "")
@@ -700,10 +791,10 @@ elif page == "Settings":
 
     st.header("Links")
     st.markdown(
-        """
+        f"""
         - [Datadog LLM Observability](https://app.datadoghq.com/llm)
-        - [GCP Cloud Build](https://console.cloud.google.com/cloud-build)
-        - [GCS Artifacts](https://console.cloud.google.com/storage/browser/ai-safety-evals-artifacts)
+        - [GKE Workloads](https://console.cloud.google.com/kubernetes/workload?project={GCP_PROJECT_ID})
+        - [GCS Artifacts](https://console.cloud.google.com/storage/browser/{GCS_BUCKET})
         - [GitHub Repository](https://github.com/Lona44/ai-safety-evals)
         """
     )

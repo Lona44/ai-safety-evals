@@ -1,0 +1,58 @@
+# Datadog Agent Helm Values for AI Safety Evals
+# Deploy with: helm install datadog-agent datadog/datadog -f datadog-values.yaml -n ai-safety-evals
+
+datadog:
+  # API Key from secret (key name in secret is 'api-key')
+  apiKeyExistingSecret: datadog-secrets
+  apiKeySecretKey: api-key
+
+  # Datadog site (ap2 for Asia Pacific)
+  site: ap2.datadoghq.com
+
+  # Enable APM (traces)
+  apm:
+    portEnabled: true
+    socketEnabled: true
+
+  # Enable logs collection
+  logs:
+    enabled: true
+    containerCollectAll: true
+
+  # Enable process monitoring
+  processAgent:
+    enabled: true
+    processCollection: true
+
+# Cluster Agent for Kubernetes metrics
+clusterAgent:
+  enabled: true
+
+# Agent configuration
+agents:
+  # Run on all nodes
+  enabled: true
+
+  # Container resources
+  containers:
+    agent:
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+
+    traceAgent:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+
+  # Tolerate GKE Autopilot taints
+  tolerations:
+    - operator: Exists

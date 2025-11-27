@@ -1,0 +1,130 @@
+# AI Safety Experiment Job Template
+#
+# This Job runs an AI safety evaluation experiment with two containers:
+# 1. submission-server: The scenario/challenge server
+# 2. agent: The AI agent being evaluated
+#
+# Usage:
+#   kubectl create -f experiment-job.yaml
+#
+# Or with parameter substitution:
+#   envsubst < experiment-job.yaml | kubectl create -f -
+#
+# Environment variables for substitution:
+#   EXPERIMENT_ID: Unique experiment identifier
+#   SCENARIO: Scenario name (e.g., numberguess_game)
+#   MODEL: Gemini model to use (e.g., gemini-2.0-flash)
+#   REASONING: Enable reasoning mode (true/false)
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: experiment-$EXPERIMENT_ID
+  namespace: ai-safety-evals
+  labels:
+    app: ai-safety-evals
+    component: experiment
+    scenario: $SCENARIO
+    model: $MODEL
+spec:
+  ttlSecondsAfterFinished: 3600  # Auto-cleanup after 1 hour
+  backoffLimit: 0  # Don't retry failed experiments
+  template:
+    metadata:
+      labels:
+        app: ai-safety-evals
+        component: experiment
+    spec:
+      serviceAccountName: experiment-runner
+      restartPolicy: Never
+
+      containers:
+        # Submission Server (scenario challenge)
+        - name: submission-server
+          image: us-central1-docker.pkg.dev/modelproof-platform/ai-safety-evals/submission:latest
+          env:
+            - name: SCENARIO
+              value: "$SCENARIO"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+
+        # Agent Controller (AI being evaluated)
+        - name: agent
+          image: us-central1-docker.pkg.dev/modelproof-platform/ai-safety-evals/agent:latest
+          # Add startup delay to let submission server create pipes
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for submission server to be ready..."
+              sleep 3
+              echo "Starting agent..."
+              python3 /app/run_loop.py
+          env:
+            # Experiment config
+            - name: UNIFIED_EXPERIMENT_ID
+              value: "$EXPERIMENT_ID"
+            - name: UNIFIED_SCENARIO
+              value: "$SCENARIO"
+            - name: UNIFIED_MODEL
+              value: "$MODEL"
+            - name: UNIFIED_REASONING
+              value: "$REASONING"
+            - name: UNIFIED_MAX_STEPS
+              value: "30"
+            # Model selection (used by run_loop.py main())
+            - name: MODEL
+              value: "$MODEL"
+            - name: REASONING
+              value: "$REASONING"
+
+            # GCP config (for Vertex AI)
+            - name: GCP_PROJECT_ID
+              value: "modelproof-platform"
+            - name: GCP_LOCATION
+              value: "global"
+
+            # GCS bucket for results
+            - name: GCS_BUCKET
+              value: "ai-safety-evals-artifacts"
+
+            # Datadog config
+            - name: DD_SERVICE
+              value: "ai-safety-evals"
+            - name: DD_ENV
+              value: "production"
+            - name: DD_SITE
+              value: "ap2.datadoghq.com"
+            - name: DD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: datadog-secrets
+                  key: api-key
+                  optional: true
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            - name: results
+              mountPath: /app/outputs
+
+      volumes:
+        - name: shared
+          emptyDir: {}
+        - name: results
+          emptyDir: {}

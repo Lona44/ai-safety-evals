@@ -1,247 +1,156 @@
 {
   "title": "AI Safety Evals - Alignment Monitoring",
-  "description": "Real-time monitoring of AI model alignment signals and safety metrics from LLM Observability",
+  "description": "Monitor AI model alignment evaluations. High scores (≥50) indicate misalignment was detected. Track behavioral signals, judge consensus, and model comparisons.",
   "widgets": [
+    {
+      "id": 0,
+      "definition": {
+        "type": "note",
+        "content": "## How to Read This Dashboard\n\n- 🟢 **0-49**: No significant misalignment\n- 🟡 **50-69**: Misalignment detected  \n- 🔴 **70-100**: High-risk misalignment\n\n**Deception/Manipulation**: Critical safety signals detected in agent behavior",
+        "background_color": "white",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "tick_pos": "50%",
+        "tick_edge": "left",
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 0, "width": 2, "height": 2}
+    },
     {
       "id": 1,
       "definition": {
-        "title": "Alignment Score Distribution",
+        "title": "Avg Score",
         "title_size": "16",
-        "title_align": "left",
-        "type": "toplist",
+        "title_align": "center",
+        "type": "query_value",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1",
-                "limit": {
-                  "count": 10,
-                  "order": "desc"
-                }
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "avg",
-                  "metric": "@alignment_final_score"
-                },
-                "group_by": [
-                  {
-                    "facet": "@experiment_id",
-                    "limit": 10,
-                    "sort": {
-                      "aggregation": "avg",
-                      "order": "desc",
-                      "metric": "@alignment_final_score"
-                    }
-                  }
-                ],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "avg:ai_safety.final_score{service:ai-safety-evals,!experiment_id:dash-test-1764192369}"
               }
             ],
-            "response_format": "scalar"
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">=", "value": 70, "palette": "white_on_red"},
+              {"comparator": ">=", "value": 50, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 50, "palette": "white_on_green"}
+            ]
           }
-        ]
+        ],
+        "autoscale": false,
+        "precision": 0,
+        "custom_unit": "/100"
       },
-      "layout": {
-        "x": 0,
-        "y": 0,
-        "width": 4,
-        "height": 4
-      }
+      "layout": {"x": 2, "y": 0, "width": 2, "height": 2}
     },
     {
       "id": 2,
       "definition": {
-        "title": "Misalignment Alerts (Score > 70)",
+        "title": "Experiments Run",
         "title_size": "16",
-        "title_align": "left",
+        "title_align": "center",
         "type": "query_value",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1"
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @alignment_final_score:>70"
-                }
+                "query": "sum:ai_safety.experiments{service:ai-safety-evals,!experiment_id:dash-test-1764192369}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
-            "response_format": "scalar",
-            "conditional_formats": [
-              {
-                "comparator": ">",
-                "value": 0,
-                "palette": "white_on_red"
-              },
-              {
-                "comparator": "<=",
-                "value": 0,
-                "palette": "white_on_green"
-              }
-            ]
+            "response_format": "scalar"
           }
         ],
         "autoscale": true,
         "precision": 0
       },
-      "layout": {
-        "x": 4,
-        "y": 0,
-        "width": 2,
-        "height": 2
-      }
+      "layout": {"x": 4, "y": 0, "width": 2, "height": 2}
     },
     {
       "id": 3,
       "definition": {
-        "title": "Deception Attempts Detected",
+        "title": "Misaligned",
         "title_size": "16",
-        "title_align": "left",
+        "title_align": "center",
         "type": "query_value",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1"
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @signal_type:deception @detected:true"
-                }
+                "query": "sum:ai_safety.misalignment_detected{service:ai-safety-evals}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
             "response_format": "scalar",
             "conditional_formats": [
-              {
-                "comparator": ">",
-                "value": 0,
-                "palette": "white_on_red"
-              },
-              {
-                "comparator": "<=",
-                "value": 0,
-                "palette": "white_on_green"
-              }
+              {"comparator": ">", "value": 0, "palette": "white_on_yellow"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"}
             ]
           }
         ],
         "autoscale": true,
         "precision": 0
       },
-      "layout": {
-        "x": 6,
-        "y": 0,
-        "width": 2,
-        "height": 2
-      }
+      "layout": {"x": 6, "y": 0, "width": 2, "height": 2}
     },
     {
       "id": 4,
       "definition": {
-        "title": "Forbidden Access Attempts",
+        "title": "Deception Detected",
         "title_size": "16",
-        "title_align": "left",
+        "title_align": "center",
         "type": "query_value",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1"
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @forbidden_access:true"
-                }
+                "query": "sum:ai_safety.signals.detected{service:ai-safety-evals,signal_type:deception}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
             "response_format": "scalar",
             "conditional_formats": [
-              {
-                "comparator": ">",
-                "value": 0,
-                "palette": "white_on_yellow"
-              },
-              {
-                "comparator": "<=",
-                "value": 0,
-                "palette": "white_on_green"
-              }
+              {"comparator": ">", "value": 0, "palette": "white_on_red"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"}
             ]
           }
         ],
         "autoscale": true,
         "precision": 0
       },
-      "layout": {
-        "x": 8,
-        "y": 0,
-        "width": 2,
-        "height": 2
-      }
+      "layout": {"x": 8, "y": 0, "width": 2, "height": 2}
     },
     {
       "id": 5,
       "definition": {
-        "title": "Total Experiments Run",
+        "title": "Judge Consensus",
         "title_size": "16",
-        "title_align": "left",
+        "title_align": "center",
         "type": "query_value",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1"
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "cardinality",
-                  "metric": "@experiment_id"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "sum:ai_safety.consensus_reached{service:ai-safety-evals}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
             "response_format": "scalar"
@@ -250,356 +159,218 @@
         "autoscale": true,
         "precision": 0
       },
-      "layout": {
-        "x": 10,
-        "y": 0,
-        "width": 2,
-        "height": 2
-      }
+      "layout": {"x": 10, "y": 0, "width": 2, "height": 2}
     },
     {
-      "id": 6,
+      "id": 14,
       "definition": {
-        "title": "Alignment Score Over Time",
+        "title": "Judge Scores (Avg)",
         "title_size": "16",
         "title_align": "left",
-        "show_legend": true,
-        "legend_layout": "auto",
-        "legend_columns": ["avg", "min", "max", "value"],
-        "type": "timeseries",
+        "type": "toplist",
         "requests": [
           {
             "formulas": [
-              {
-                "alias": "Alignment Score",
-                "formula": "query1"
-              }
+              {"formula": "query1", "limit": {"count": 10, "order": "desc"}}
             ],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "avg",
-                  "metric": "@alignment_final_score"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "avg:ai_safety.alignment.score{service:ai-safety-evals,!experiment_id:dash-test-1764192369,$scenario} by {judge}",
+                "aggregator": "avg"
               }
             ],
-            "response_format": "timeseries",
-            "style": {
-              "palette": "warm",
-              "line_type": "solid",
-              "line_width": "normal"
-            },
-            "display_type": "line"
-          }
-        ],
-        "yaxis": {
-          "min": "0",
-          "max": "100"
-        },
-        "markers": [
-          {
-            "value": "y = 70",
-            "display_type": "error dashed",
-            "label": "High Risk Threshold"
-          },
-          {
-            "value": "y = 40",
-            "display_type": "warning dashed",
-            "label": "Moderate Risk Threshold"
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">=", "value": 70, "palette": "white_on_red"},
+              {"comparator": ">=", "value": 50, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 50, "palette": "white_on_green"}
+            ]
           }
         ]
       },
-      "layout": {
-        "x": 0,
-        "y": 4,
-        "width": 6,
-        "height": 3
-      }
+      "layout": {"x": 0, "y": 2, "width": 6, "height": 3}
     },
     {
       "id": 7,
       "definition": {
-        "title": "Judge Consensus Rate",
-        "title_size": "16",
-        "title_align": "left",
-        "type": "timeseries",
-        "requests": [
-          {
-            "formulas": [
-              {
-                "alias": "Consensus Achieved",
-                "formula": "query1"
-              },
-              {
-                "alias": "No Consensus",
-                "formula": "query2"
-              }
-            ],
-            "queries": [
-              {
-                "data_source": "spans",
-                "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @judge_consensus:true"
-                }
-              },
-              {
-                "data_source": "spans",
-                "name": "query2",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [],
-                "search": {
-                  "query": "service:ai-safety-evals @judge_consensus:false"
-                }
-              }
-            ],
-            "response_format": "timeseries",
-            "style": {
-              "palette": "dog_classic"
-            },
-            "display_type": "bars"
-          }
-        ]
-      },
-      "layout": {
-        "x": 6,
-        "y": 4,
-        "width": 6,
-        "height": 3
-      }
-    },
-    {
-      "id": 8,
-      "definition": {
-        "title": "Alignment by Model",
+        "title": "Model Comparison (Avg Score)",
         "title_size": "16",
         "title_align": "left",
         "type": "toplist",
         "requests": [
           {
             "formulas": [
-              {
-                "formula": "query1",
-                "limit": {
-                  "count": 10,
-                  "order": "desc"
-                }
-              }
+              {"formula": "query1", "limit": {"count": 10, "order": "desc"}}
             ],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "avg",
-                  "metric": "@alignment_final_score"
-                },
-                "group_by": [
-                  {
-                    "facet": "@model",
-                    "limit": 10,
-                    "sort": {
-                      "aggregation": "avg",
-                      "order": "desc",
-                      "metric": "@alignment_final_score"
-                    }
-                  }
-                ],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "avg:ai_safety.final_score{service:ai-safety-evals,!experiment_id:dash-test-1764192369} by {model}",
+                "aggregator": "avg"
               }
             ],
-            "response_format": "scalar"
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">=", "value": 70, "palette": "white_on_red"},
+              {"comparator": ">=", "value": 50, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 50, "palette": "white_on_green"}
+            ]
           }
         ]
       },
-      "layout": {
-        "x": 0,
-        "y": 7,
-        "width": 4,
-        "height": 3
-      }
+      "layout": {"x": 6, "y": 2, "width": 6, "height": 3}
+    },
+    {
+      "id": 11,
+      "definition": {
+        "title": "Recent Experiment Results",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "limit": {"count": 10, "order": "desc"}}
+            ],
+            "queries": [
+              {
+                "data_source": "metrics",
+                "name": "query1",
+                "query": "max:ai_safety.final_score{service:ai-safety-evals,!experiment_id:dash-test-1764192369} by {experiment_id}",
+                "aggregator": "last"
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">=", "value": 70, "palette": "white_on_red"},
+              {"comparator": ">=", "value": 50, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 50, "palette": "white_on_green"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 5, "width": 6, "height": 3}
     },
     {
       "id": 9,
       "definition": {
-        "title": "Alignment by Scenario",
+        "title": "Behavioral Signals",
         "title_size": "16",
         "title_align": "left",
         "type": "toplist",
         "requests": [
           {
             "formulas": [
-              {
-                "formula": "query1",
-                "limit": {
-                  "count": 10,
-                  "order": "desc"
-                }
-              }
+              {"formula": "query1", "limit": {"count": 5, "order": "desc"}}
             ],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "avg",
-                  "metric": "@alignment_final_score"
-                },
-                "group_by": [
-                  {
-                    "facet": "@scenario",
-                    "limit": 10,
-                    "sort": {
-                      "aggregation": "avg",
-                      "order": "desc",
-                      "metric": "@alignment_final_score"
-                    }
-                  }
-                ],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "sum:ai_safety.signals.detected{service:ai-safety-evals} by {signal_type}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
-            "response_format": "scalar"
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_red"}
+            ]
           }
         ]
       },
-      "layout": {
-        "x": 4,
-        "y": 7,
-        "width": 4,
-        "height": 3
-      }
+      "layout": {"x": 6, "y": 5, "width": 3, "height": 3}
     },
     {
       "id": 10,
       "definition": {
-        "title": "Result Status Distribution",
+        "title": "Forbidden Access",
+        "title_size": "16",
+        "title_align": "center",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "metrics",
+                "name": "query1",
+                "query": "sum:ai_safety.forbidden_access{service:ai-safety-evals}.as_count().rollup(sum)",
+                "aggregator": "sum"
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_red"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"}
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {"x": 9, "y": 5, "width": 3, "height": 1}
+    },
+    {
+      "id": 13,
+      "definition": {
+        "title": "High Risk Experiments",
+        "title_size": "16",
+        "title_align": "center",
+        "type": "query_value",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "metrics",
+                "name": "query1",
+                "query": "sum:ai_safety.high_risk{service:ai-safety-evals}.as_count().rollup(sum)",
+                "aggregator": "sum"
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_red"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"}
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      },
+      "layout": {"x": 9, "y": 6, "width": 3, "height": 1}
+    },
+    {
+      "id": 12,
+      "definition": {
+        "title": "Severity Distribution",
         "title_size": "16",
         "title_align": "left",
         "type": "sunburst",
         "requests": [
           {
-            "formulas": [
-              {
-                "formula": "query1"
-              }
-            ],
+            "formulas": [{"formula": "query1"}],
             "queries": [
               {
-                "data_source": "spans",
+                "data_source": "metrics",
                 "name": "query1",
-                "indexes": ["*"],
-                "compute": {
-                  "aggregation": "count"
-                },
-                "group_by": [
-                  {
-                    "facet": "@result_status",
-                    "limit": 10,
-                    "sort": {
-                      "aggregation": "count",
-                      "order": "desc"
-                    }
-                  }
-                ],
-                "search": {
-                  "query": "service:ai-safety-evals @span.type:llm"
-                }
+                "query": "sum:ai_safety.experiments{service:ai-safety-evals,!experiment_id:dash-test-1764192369} by {severity}.as_count().rollup(sum)",
+                "aggregator": "sum"
               }
             ],
             "response_format": "scalar"
           }
         ]
       },
-      "layout": {
-        "x": 8,
-        "y": 7,
-        "width": 4,
-        "height": 3
-      }
-    },
-    {
-      "id": 11,
-      "definition": {
-        "title": "Recent LLM Traces",
-        "title_size": "16",
-        "title_align": "left",
-        "type": "list_stream",
-        "requests": [
-          {
-            "columns": [
-              {
-                "width": "auto",
-                "field": "timestamp"
-              },
-              {
-                "width": "auto",
-                "field": "@experiment_id"
-              },
-              {
-                "width": "auto",
-                "field": "@model"
-              },
-              {
-                "width": "auto",
-                "field": "@alignment_final_score"
-              },
-              {
-                "width": "auto",
-                "field": "@result_status"
-              }
-            ],
-            "query": {
-              "data_source": "spans_stream",
-              "query_string": "service:ai-safety-evals @span.type:llm",
-              "indexes": ["*"]
-            },
-            "response_format": "event_list"
-          }
-        ]
-      },
-      "layout": {
-        "x": 0,
-        "y": 10,
-        "width": 12,
-        "height": 4
-      }
+      "layout": {"x": 9, "y": 7, "width": 3, "height": 1}
     }
   ],
   "template_variables": [
-    {
-      "name": "model",
-      "prefix": "@model",
-      "available_values": [],
-      "default": "*"
-    },
-    {
-      "name": "scenario",
-      "prefix": "@scenario",
-      "available_values": [],
-      "default": "*"
-    }
+    {"name": "model", "prefix": "model", "available_values": [], "default": "*"},
+    {"name": "scenario", "prefix": "scenario", "available_values": [], "default": "*"}
   ],
   "layout_type": "ordered",
   "notify_list": [],

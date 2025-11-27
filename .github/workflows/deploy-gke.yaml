@@ -1,0 +1,197 @@
+# Deploy AI Safety Evals to GKE
+#
+# This workflow:
+# 1. Builds and pushes container images to Artifact Registry
+# 2. Deploys the Streamlit dashboard to Cloud Run
+# 3. Sets up GKE namespace and service account (if needed)
+#
+# Triggered on push to main or manual dispatch.
+#
+# Required GitHub Secrets:
+#   - WIF_PROVIDER: Workload Identity Federation provider
+#   - WIF_SERVICE_ACCOUNT: Service account for WIF
+#   - DD_API_KEY: Datadog API key
+
+name: Deploy to GKE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'scenarios/**'
+      - 'runners/**'
+      - 'streamlit_app/**'
+      - 'gcp-deploy/k8s/**'
+      - '.github/workflows/deploy-gke.yaml'
+  workflow_dispatch:
+    inputs:
+      run_experiment:
+        description: 'Run a test experiment after deploy'
+        required: false
+        default: 'false'
+        type: boolean
+      scenario:
+        description: 'Scenario to run'
+        required: false
+        default: 'numberguess_game'
+      model:
+        description: 'Model to use'
+        required: false
+        default: 'gemini-2.0-flash'
+
+env:
+  GCP_PROJECT_ID: modelproof-platform
+  GCP_REGION: us-central1
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev/modelproof-platform/ai-safety-evals
+  GCS_BUCKET: ai-safety-evals-artifacts
+  GKE_CLUSTER: ai-safety-evals
+  K8S_NAMESPACE: ai-safety-evals
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-images:
+    name: Build Container Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build Agent Image
+        run: |
+          docker build --platform linux/amd64 \
+            -t ${{ env.ARTIFACT_REGISTRY }}/agent:${{ github.sha }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/agent:latest \
+            -f agent/Dockerfile \
+            .
+
+      - name: Build Submission Image
+        run: |
+          docker build --platform linux/amd64 \
+            -t ${{ env.ARTIFACT_REGISTRY }}/submission:${{ github.sha }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/submission:latest \
+            -f scenarios/numberguess_game/Dockerfile \
+            scenarios/numberguess_game
+
+      - name: Build Dashboard Image
+        run: |
+          docker build --platform linux/amd64 \
+            -t ${{ env.ARTIFACT_REGISTRY }}/dashboard:${{ github.sha }} \
+            -t ${{ env.ARTIFACT_REGISTRY }}/dashboard:latest \
+            -f streamlit_app/Dockerfile \
+            .
+
+      - name: Push Images
+        run: |
+          docker push ${{ env.ARTIFACT_REGISTRY }}/agent:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/agent:latest
+          docker push ${{ env.ARTIFACT_REGISTRY }}/submission:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/submission:latest
+          docker push ${{ env.ARTIFACT_REGISTRY }}/dashboard:${{ github.sha }}
+          docker push ${{ env.ARTIFACT_REGISTRY }}/dashboard:latest
+
+  deploy-dashboard:
+    name: Deploy Dashboard to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [build-images]
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Dashboard to Cloud Run
+        run: |
+          gcloud run deploy ai-safety-dashboard \
+            --image=${{ env.ARTIFACT_REGISTRY }}/dashboard:${{ github.sha }} \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --allow-unauthenticated \
+            --memory=1Gi \
+            --cpu=1 \
+            --timeout=300 \
+            --set-env-vars="GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GCS_BUCKET=${{ env.GCS_BUCKET }},GKE_CLUSTER=${{ env.GKE_CLUSTER }},K8S_NAMESPACE=${{ env.K8S_NAMESPACE }},DD_API_KEY=${{ secrets.DD_API_KEY }},DD_SITE=ap2.datadoghq.com" \
+            --quiet
+
+      - name: Get Dashboard URL
+        run: |
+          DASHBOARD_URL=$(gcloud run services describe ai-safety-dashboard \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --format='value(status.url)')
+          echo "Dashboard deployed to: $DASHBOARD_URL"
+
+  setup-gke:
+    name: Setup GKE Namespace
+    runs-on: ubuntu-latest
+    needs: [build-images]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin --quiet
+
+      - name: Get GKE Credentials
+        run: |
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} \
+            --region=${{ env.GCP_REGION }} \
+            --project=${{ env.GCP_PROJECT_ID }}
+
+      - name: Apply K8s Manifests
+        run: |
+          kubectl apply -f gcp-deploy/k8s/namespace.yaml
+          kubectl apply -f gcp-deploy/k8s/service-account.yaml
+
+  sync-scenarios:
+    name: Sync Scenarios to GCS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Sync scenarios to GCS
+        run: |
+          gsutil -m rsync -r ./scenarios gs://${{ env.GCS_BUCKET }}/scenarios/
